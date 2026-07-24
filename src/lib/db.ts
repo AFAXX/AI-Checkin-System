@@ -397,6 +397,19 @@ export const db = {
       return applyIncludes({ ...contract }, include, 'contract')
     },
 
+    findFirst({ where, include, orderBy }: {
+      where?: Record<string, any>; include?: Record<string, any>;
+      orderBy?: Record<string, any>
+    } = {}) {
+      logQuery(`contract.findFirst`)
+      let results = [...contracts.values()]
+      if (where) results = results.filter(c => matchesWhere(c, where))
+      results = applyOrderBy(results, orderBy)
+      const first = results[0]
+      if (!first) return null
+      return applyIncludes({ ...first }, include, 'contract')
+    },
+
     findMany({ where, include, orderBy, take }: {
       where?: Record<string, any>; include?: Record<string, any>;
       orderBy?: Record<string, any>; take?: number
