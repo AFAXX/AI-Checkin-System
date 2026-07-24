@@ -1,14 +1,8 @@
 import { NextResponse } from "next/server"
-import type { NextRequest } from "next/server"
 
-// Lightweight middleware - no NextAuth dependency to avoid env var issues
-// Auth is handled client-side with the demo mode
-export default function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl
-
-  // Log for demo visibility
-  console.log(`[Middleware] ${pathname}`)
-
+// Simplified middleware — no next-auth dependency.
+// Auth is handled client-side via localStorage demo.
+export default function middleware(request: Request) {
   return NextResponse.next()
 }
 
