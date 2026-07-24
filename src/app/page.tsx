@@ -442,24 +442,22 @@ function DashboardView({
   loadingContracts: boolean; onInspect: (c: Contract, k: 'pickup' | 'return') => void
   onLogout: () => void
 }) {
-  const [tab, setTab] = useState<'checkouts' | 'checkins' | 'archive'>('checkouts')
+  const [tab, setTab] = useState<'checkins' | 'checkouts' | 'archive'>('checkins')
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [uploadingExcel, setUploadingExcel] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [uploadType, setUploadType] = useState<'checkout' | 'checkin'>('checkout')
 
-  // Check-outs: customer picking up car → awaiting pickup inspection
-  const checkoutContracts = contracts.filter(c =>
-    c.status === 'checkout_pending' || c.status === 'active'
-  )
-  // Check-ins: customer dropping off car → awaiting return inspection
+  // Check-ins: contracts with no pickup inspection done yet (or active without return)
   const checkinContracts = contracts.filter(c =>
-    c.status === 'return_pending'
+    c.status !== 'completed' && (!c.inspections.find(i => i.kind === 'pickup') || c.status === 'active' || c.status === 'pickup_pending')
   )
-  // Archive: both pickup and return inspections completed
+  // Check-outs: contracts with pickup done but no return inspection
+  const checkoutContracts = contracts.filter(c =>
+    c.status !== 'completed' && c.inspections.find(i => i.kind === 'pickup') && !c.inspections.find(i => i.kind === 'return')
+  )
   const archiveContracts = contracts.filter(c => c.status === 'completed')
 
-  const filtered = (tab === 'checkouts' ? checkoutContracts : tab === 'checkins' ? checkinContracts : archiveContracts).filter(c =>
+  const filtered = (tab === 'checkins' ? checkinContracts : tab === 'checkouts' ? checkoutContracts : archiveContracts).filter(c =>
     c.reservationNumber.toLowerCase().includes(search.toLowerCase()) ||
     c.customerName.toLowerCase().includes(search.toLowerCase()) ||
     c.vehicleReg.toLowerCase().includes(search.toLowerCase()) ||
@@ -474,11 +472,13 @@ function DashboardView({
     try {
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('type', uploadType)
       const res = await fetch('/api/import', { method: 'POST', body: formData })
       const data = await res.json()
       if (data.success) {
-        setUploadStatus(`Imported ${data.imported} of ${data.total} ${data.type === 'checkin' ? 'check-ins' : 'check-outs'}`)
+        setUploadStatus(`Imported ${data.imported} of ${data.total} contracts`)
+        // Reload contracts
+        const updated = await fetch('/api/contracts').then(r => r.json()).catch(() => [])
+        // Force page reload to get fresh state
         window.location.reload()
       } else {
         setUploadStatus('Import failed: ' + (data.error || 'Unknown error'))
@@ -535,7 +535,7 @@ function DashboardView({
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <Input
-            placeholder="Search by reservation, customer, plate or model..."
+            placeholder="Search by reservation number or customer name..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-10 h-12 text-base bg-white border-slate-200"
@@ -545,8 +545,8 @@ function DashboardView({
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: 'Check-Outs', value: checkoutContracts.length, icon: ArrowUpRight, color: 'text-blue-600 bg-blue-50' },
-            { label: 'Check-Ins', value: checkinContracts.length, icon: ArrowDownLeft, color: 'text-purple-600 bg-purple-50' },
+            { label: 'Check-Ins', value: checkinContracts.length, icon: ArrowDownLeft, color: 'text-blue-600 bg-blue-50' },
+            { label: 'Check-Outs', value: checkoutContracts.length, icon: ArrowUpRight, color: 'text-purple-600 bg-purple-50' },
             { label: 'Completed', value: archiveContracts.length, icon: CheckCircle2, color: 'text-green-600 bg-green-50' },
             { label: 'Total Inspections', value: contracts.reduce((acc, c) => acc + c.inspections.length, 0), icon: Video, color: 'text-amber-600 bg-amber-50' },
           ].map(stat => (
@@ -564,22 +564,22 @@ function DashboardView({
           ))}
         </div>
 
-        {/* Tabs: Check-Outs | Check-Ins | Archive */}
+        {/* Tabs: Check-Ins | Check-Outs | Archive */}
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden">
             <button
-              onClick={() => setTab('checkouts')}
-              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkouts' ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
-            >
-              <ArrowUpRight className="w-4 h-4 inline mr-1" />
-              Check-Outs ({checkoutContracts.length})
-            </button>
-            <button
               onClick={() => setTab('checkins')}
-              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkins' ? 'bg-purple-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkins' ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
             >
               <ArrowDownLeft className="w-4 h-4 inline mr-1" />
               Check-Ins ({checkinContracts.length})
+            </button>
+            <button
+              onClick={() => setTab('checkouts')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkouts' ? 'bg-purple-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+              <ArrowUpRight className="w-4 h-4 inline mr-1" />
+              Check-Outs ({checkoutContracts.length})
             </button>
             <button
               onClick={() => setTab('archive')}
@@ -592,42 +592,27 @@ function DashboardView({
 
           <div className="flex-1" />
 
-          {/* Upload Excel Buttons */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => { setUploadType('checkout'); setTab('checkouts') }}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${uploadType === 'checkout' ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-            >
-              Check-Outs file
-            </button>
-            <button
-              onClick={() => { setUploadType('checkin'); setTab('checkins') }}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${uploadType === 'checkin' ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
-            >
-              Check-Ins file
-            </button>
-            <div className="w-px h-6 bg-slate-200" />
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="hidden"
-              onChange={handleExcelUpload}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadingExcel}
-              className={`border-emerald-200 hover:bg-emerald-50 ${uploadType === 'checkout' ? 'text-blue-700' : 'text-purple-700'}`}
-            >
-              {uploadingExcel ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-2" />}
-              Upload {uploadType === 'checkout' ? 'Check-Outs' : 'Check-Ins'}
-            </Button>
-          </div>
+          {/* Upload Excel Button */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleExcelUpload}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadingExcel}
+            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+          >
+            {uploadingExcel ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600" />}
+            Upload Excel
+          </Button>
         </div>
 
-        {/* Upload status */}
+        {/* Upload status message */}
         {uploadStatus && (
           <motion.div
             initial={{ opacity: 0, y: -10 }}
@@ -642,18 +627,20 @@ function DashboardView({
         {/* Contracts List */}
         <Card className="bg-white border-slate-200">
           <CardHeader>
-            <CardTitle className="text-lg">{tab === 'checkouts' ? 'Check-Outs Queue (Pickup)' : tab === 'checkins' ? 'Check-Ins Queue (Dropoff)' : 'Completed Archive'}</CardTitle>
+            <CardTitle className="text-lg">{tab === 'checkins' ? 'Check-Ins Queue' : tab === 'checkouts' ? 'Check-Outs Queue' : 'Completed Archive'}</CardTitle>
             <CardDescription>{filtered.length} contract{filtered.length !== 1 ? 's' : ''} found</CardDescription>
           </CardHeader>
           <CardContent>
             {loadingContracts ? (
               <div className="space-y-3">
-                {[1, 2, 3].map(i => <Skeleton key={i} className="h-20 w-full rounded-lg" />)}
+                {[1, 2, 3].map(i => (
+                  <Skeleton key={i} className="h-20 w-full rounded-lg" />
+                ))}
               </div>
             ) : filtered.length === 0 ? (
               <div className="text-center py-12 text-slate-400">
                 <Car className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">No contracts found. Upload an Excel file to get started.</p>
+                <p className="text-sm">No contracts found matching your search.</p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -668,38 +655,52 @@ function DashboardView({
                       <CardContent className="p-4">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                           <div className="flex items-start gap-3 flex-1 min-w-0">
-                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${tab === 'checkouts' ? 'bg-blue-50' : tab === 'checkins' ? 'bg-purple-50' : 'bg-slate-100'}`}>
-                              <Car className={`w-5 h-5 ${tab === 'checkouts' ? 'text-blue-600' : tab === 'checkins' ? 'text-purple-600' : 'text-slate-500'}`} />
+                            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center shrink-0 mt-0.5">
+                              <Car className="w-5 h-5 text-amber-600" />
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-semibold text-slate-900">{contract.reservationNumber}</span>
                                 <Badge variant="outline" className={
-                                  contract.status === 'completed' ? 'border-green-300 text-green-700' :
-                                  contract.status === 'return_pending' ? 'border-purple-300 text-purple-700' :
-                                  'border-blue-300 text-blue-700'
+                                  contract.status === 'active' ? 'border-green-300 text-green-700' : 'border-slate-300 text-slate-600'
                                 }>
-                                  {contract.status === 'checkout_pending' ? 'Pickup Pending' :
-                                   contract.status === 'return_pending' ? 'Return Pending' :
-                                   contract.status === 'completed' ? 'Completed' : contract.status}
+                                  {contract.status}
                                 </Badge>
                               </div>
                               <p className="text-sm text-slate-600 mt-0.5">{contract.customerName}</p>
                               <div className="flex items-center gap-3 mt-1 text-xs text-slate-500 flex-wrap">
-                                <span className="flex items-center gap-1"><Car className="w-3 h-3" />{contract.vehicleModel}</span>
-                                <span className="flex items-center gap-1"><Signpost className="w-3 h-3" />{contract.vehicleReg}</span>
-                                <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{new Date(contract.pickupDate).toLocaleDateString()}</span>
+                                <span className="flex items-center gap-1">
+                                  <Car className="w-3 h-3" />
+                                  {contract.vehicleModel}
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <Signpost className="w-3 h-3" />
+                                  {contract.vehicleReg}
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {new Date(contract.pickupDate).toLocaleDateString()}
+                                </span>
                               </div>
+                              {/* Inspection status */}
                               <div className="flex items-center gap-2 mt-2 flex-wrap">
                                 {contract.inspections.find(i => i.kind === 'pickup') ? (
-                                  <Badge className="bg-green-100 text-green-700 text-xs">Pickup Done</Badge>
+                                  <Badge className="bg-green-100 text-green-700 text-xs">
+                                    Pickup Done
+                                  </Badge>
                                 ) : (
-                                  <Badge className="bg-blue-100 text-blue-700 text-xs">Pickup Pending</Badge>
+                                  <Badge className="bg-blue-100 text-blue-700 text-xs">
+                                    Pickup Pending
+                                  </Badge>
                                 )}
                                 {contract.inspections.find(i => i.kind === 'return') ? (
-                                  <Badge className="bg-green-100 text-green-700 text-xs">Return Done</Badge>
+                                  <Badge className="bg-green-100 text-green-700 text-xs">
+                                    Return Done
+                                  </Badge>
                                 ) : (
-                                  <Badge className="bg-purple-100 text-purple-700 text-xs">Return Pending</Badge>
+                                  <Badge className="bg-blue-100 text-blue-700 text-xs">
+                                    Return Pending
+                                  </Badge>
                                 )}
                               </div>
                             </div>
@@ -709,13 +710,13 @@ function DashboardView({
                               <Badge className="bg-slate-100 text-slate-600 text-xs">
                                 <FileText className="w-3 h-3 mr-1" /> Archived
                               </Badge>
-                            ) : tab === 'checkouts' ? (
+                            ) : tab === 'checkins' ? (
                               <Button
                                 size="sm"
                                 className="text-xs bg-blue-500 hover:bg-blue-600 text-white"
                                 onClick={() => onInspect(contract, 'pickup')}
                               >
-                                <ArrowUpRight className="w-3 h-3 mr-1" /> Start Check-Out
+                                <ArrowDownLeft className="w-3 h-3 mr-1" /> Start Check-In
                               </Button>
                             ) : (
                               <Button
@@ -723,7 +724,7 @@ function DashboardView({
                                 className="text-xs bg-purple-500 hover:bg-purple-600 text-white"
                                 onClick={() => onInspect(contract, 'return')}
                               >
-                                <ArrowDownLeft className="w-3 h-3 mr-1" /> Start Check-In
+                                <ArrowUpRight className="w-3 h-3 mr-1" /> Start Check-Out
                               </Button>
                             )}
                           </div>
