@@ -220,17 +220,7 @@ export default function HomePage() {
         contract={selectedContract}
         onBack={() => setView('dashboard')}
       />
-    )
-  }
-
-  return null
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// LOGIN VIEW
-// ═══════════════════════════════════════════════════════════════════════════
-
-function LoginView({ onLogin }: { onLogin: () => void }) {
+    function LoginView({ onLogin }: { onLogin: () => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -248,7 +238,6 @@ function LoginView({ onLogin }: { onLogin: () => void }) {
     setError('')
     setLoading(true)
     try {
-      // Demo mode: validate against hardcoded credentials
       const demoUsers = [
         { email: 'staff@hertzmalta.com', password: 'demo123', role: 'STAFF' },
         { email: 'manager@hertzmalta.com', password: 'demo123', role: 'MANAGER' },
@@ -256,7 +245,6 @@ function LoginView({ onLogin }: { onLogin: () => void }) {
       ]
       const user = demoUsers.find(u => u.email === email && u.password === password)
       if (user) {
-        // Store session in localStorage for demo
         localStorage.setItem('hertz-session', JSON.stringify({
           email: user.email,
           role: user.role,
@@ -325,7 +313,7 @@ function LoginView({ onLogin }: { onLogin: () => void }) {
                       <Input
                         id="password"
                         type={showPassword ? 'text' : 'password'}
-                        placeholder="Enter any password (demo)"
+                        placeholder="Enter password (demo)"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         required
@@ -371,7 +359,7 @@ function LoginView({ onLogin }: { onLogin: () => void }) {
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm font-medium text-slate-300">Demo Accounts</CardTitle>
                 <CardDescription className="text-xs text-slate-500">
-                  Click to auto-fill. Any password works in demo mode.
+                  Click to auto-fill. Password: demo123
                 </CardDescription>
               </CardHeader>
               <CardContent>
