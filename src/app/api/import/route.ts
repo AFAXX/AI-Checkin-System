@@ -29,16 +29,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     }
 
-    // Auto-detect type from filename if not explicitly provided
+    // Auto-detect type from filename
     let type = (formData.get('type') as string) || '';
     if (!type) {
       const fname = file.name.toLowerCase();
-      if (fname.includes('check-in') || fname.includes('checkin') || fname.includes('check in')) {
+      if (fname.includes('check-in') || fname.includes('checkin')) {
         type = 'checkin';
-      } else if (fname.includes('check-out') || fname.includes('checkout') || fname.includes('check out')) {
+      } else if (fname.includes('check-out') || fname.includes('checkout')) {
         type = 'checkout';
       } else {
-        type = 'checkout'; // default fallback
+        type = 'checkout';
       }
     }
 
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
 
     for (const row of rows) {
       try {
-        // ── Common fields (present in both Check-outs and Check-ins) ──
+        // ── Common fields ──
         const reservationNumber =
           row['Confirmation #'] || row['Rental'] || row['Voucher #'] || `RES-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const customerName =
@@ -77,76 +77,9 @@ export async function POST(request: NextRequest) {
         const timeVal = row['Time'] || row['time'] || null;
         const parsedDate = parseDate(timeVal) || new Date();
 
-        // ── Type-specific mapping ──
-        if (type === 'checkin') {
-          // ── CHECK-IN (drop-off / return) mapping ──
-          const fuelType = row['Fuel type'] || row['Fuel'] || row['fuel'] || '';
-          const transmission = row['Transmission'] || row['transmission'] || '';
-          const days = row['Days'] || row['days'] || 0;
-          const checkinLocation = row['Check-in location'] || row['Location'] || '';
-          const mileage = row['Mileage'] || row['mileage'] || '';
-          const fuelLevel = row['Fuel level'] || row['fuel level'] || '';
-          const damageNotes = row['Damage notes'] || row['damage notes'] || row['Damage Notes'] || '';
-          const checkinBy = row['Check-in by'] || row['check-in by'] || '';
-          const voucherNumber = row['Voucher #'] || row['Voucher'] || '';
-          const corporate = row['Corporate'] || row['corporate'] || '';
-          const status = row['Status'] || '';
-
-          // Calculate return date based on days
-          let returnDate: Date | null = null;
-          if (days && typeof days === 'number' && days > 0) {
-            returnDate = new Date(parsedDate);
-            returnDate.setDate(returnDate.getDate() + days);
-          }
-
-          // Check if contract already exists by reservation number
-          const existing = await db.contract.findFirst({
-            where: { reservationNumber: String(reservationNumber) },
-          });
-
-          if (existing) {
-            // Update existing contract with check-in data
-            await db.contract.update({
-              where: { id: existing.id },
-              data: {
-                status: 'completed',
-                returnDate: returnDate || parsedDate,
-                vehicleReg: String(vehicleReg) || existing.vehicleReg,
-                vehicleModel: String(vehicleModel) || existing.vehicleModel,
-                updatedAt: new Date(),
-              },
-            });
-            created.push({ ...existing, updated: true, type: 'checkin' });
-          } else {
-            // Create new contract as completed check-in
-            const contract = await db.contract.create({
-              data: {
-                reservationNumber: String(reservationNumber),
-                customerName: String(customerName),
-                customerEmail: String(customerEmail),
-                vehicleReg: String(vehicleReg),
-                vehicleModel: String(vehicleModel),
-                pickupDate: parsedDate,
-                returnDate: returnDate || parsedDate,
-                status: 'completed',
-                locationCode: String(station),
-              },
-            });
-            created.push({ ...contract, type: 'checkin' });
-          }
-        } else {
-          // ── CHECK-OUT (pickup) mapping ──
-          const fuelLevel = row['Fuel level'] || row['fuel level'] || '';
-          const damageNotes = row['Damage notes'] || row['damage notes'] || row['Damage Notes'] || '';
-          const checkoutBy = row['Check-out by'] || row['check-out by'] || '';
-          const checkoutLocation = row['Check-out location'] || row['Location'] || '';
-          const arrivalDetails = row['Arrival details'] || row['arrival details'] || '';
-          const voucherNumber = row['Voucher #'] || row['Voucher'] || '';
-          const cGroup = row['C Group'] || row['c group'] || '';
-          const status = row['Status'] || '';
-
-          // For check-outs, pickup date is the event date
-          // Return date is unknown until check-in happens
+        if (type === 'checkout') {
+          // ═══ CHECK-OUT (pickup) ═══
+          // Status = 'checkout_pending' → appears in Check-Outs tab
           const days = row['Days'] || row['days'] || 0;
           let returnDate: Date | null = null;
           if (days && typeof days === 'number' && days > 0) {
@@ -154,28 +87,25 @@ export async function POST(request: NextRequest) {
             returnDate.setDate(returnDate.getDate() + days);
           }
 
-          const contractStatus = status === 'RES' ? 'pickup_pending' : 'active';
-
-          // Check if contract already exists by reservation number
           const existing = await db.contract.findFirst({
             where: { reservationNumber: String(reservationNumber) },
           });
 
           if (existing) {
-            // Update existing contract with checkout data
             await db.contract.update({
               where: { id: existing.id },
               data: {
-                status: contractStatus,
+                status: 'checkout_pending',
                 vehicleReg: String(vehicleReg) || existing.vehicleReg,
                 vehicleModel: String(vehicleModel) || existing.vehicleModel,
                 pickupDate: parsedDate,
+                returnDate: returnDate || existing.returnDate,
+                customerName: String(customerName) || existing.customerName,
                 updatedAt: new Date(),
               },
             });
             created.push({ ...existing, updated: true, type: 'checkout' });
           } else {
-            // Create new contract for checkout
             const contract = await db.contract.create({
               data: {
                 reservationNumber: String(reservationNumber),
@@ -185,11 +115,58 @@ export async function POST(request: NextRequest) {
                 vehicleModel: String(vehicleModel),
                 pickupDate: parsedDate,
                 returnDate,
-                status: contractStatus,
+                status: 'checkout_pending',
                 locationCode: String(station),
               },
             });
             created.push({ ...contract, type: 'checkout' });
+          }
+
+        } else {
+          // ═══ CHECK-IN (drop-off / return) ═══
+          // Status = 'checkin_pending' → appears in Check-Ins tab
+          // Does NOT go to archive — only goes to archive after signature
+          const days = row['Days'] || row['days'] || 0;
+          let returnDate: Date | null = null;
+          if (days && typeof days === 'number' && days > 0) {
+            returnDate = new Date(parsedDate);
+            returnDate.setDate(returnDate.getDate() + days);
+          }
+
+          const existing = await db.contract.findFirst({
+            where: { reservationNumber: String(reservationNumber) },
+          });
+
+          if (existing) {
+            // Contract exists (was uploaded as checkout) → move to checkin queue
+            await db.contract.update({
+              where: { id: existing.id },
+              data: {
+                status: 'checkin_pending',
+                returnDate: returnDate || parsedDate,
+                vehicleReg: String(vehicleReg) || existing.vehicleReg,
+                vehicleModel: String(vehicleModel) || existing.vehicleModel,
+                customerName: String(customerName) || existing.customerName,
+                updatedAt: new Date(),
+              },
+            });
+            created.push({ ...existing, updated: true, type: 'checkin' });
+          } else {
+            // No existing checkout → create directly in checkin queue
+            const contract = await db.contract.create({
+              data: {
+                reservationNumber: String(reservationNumber),
+                customerName: String(customerName),
+                customerEmail: String(customerEmail),
+                vehicleReg: String(vehicleReg),
+                vehicleModel: String(vehicleModel),
+                pickupDate: parsedDate,
+                returnDate: returnDate || parsedDate,
+                status: 'checkin_pending',
+                locationCode: String(station),
+              },
+            });
+            created.push({ ...contract, type: 'checkin' });
           }
         }
       } catch (err: any) {
