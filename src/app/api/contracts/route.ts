@@ -28,7 +28,6 @@ export async function GET(request: NextRequest) {
         },
       },
       orderBy: { createdAt: 'desc' },
-      take: 20,
     });
 
     return NextResponse.json(contracts);
