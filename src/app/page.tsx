@@ -153,6 +153,7 @@ export default function HomePage() {
   const [search, setSearch] = useState('')
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null)
   const [activeTab, setActiveTab] = useState<'pickup' | 'return'>('pickup')
+  const [activeDashboardTab, setActiveDashboardTab] = useState<'checkouts' | 'checkins' | 'archive'>('checkouts')
   const [loadingContracts, setLoadingContracts] = useState(false)
 
   // Check localStorage on mount
@@ -164,7 +165,7 @@ export default function HomePage() {
     }
   }, [])
 
-  // Fetch contracts on dashboard
+  // Fetch contracts on dashboard (also when coming back from inspection)
   useEffect(() => {
     let cancelled = false
     if (view !== 'dashboard') return
@@ -175,7 +176,7 @@ export default function HomePage() {
     }
     loadContracts()
     return () => { cancelled = true }
-  }, [view])
+  }, [view, activeDashboardTab])
 
   const handleLogin = (u: DemoUser) => {
     setUser(u)
@@ -211,8 +212,17 @@ export default function HomePage() {
         search={search}
         setSearch={setSearch}
         loadingContracts={loadingContracts}
-        onInspect={openInspect}
+        onInspect={(c, k) => {
+          openInspect(c, k)
+          setActiveDashboardTab(k === 'pickup' ? 'checkouts' : 'checkins')
+        }}
         onLogout={handleLogout}
+        activeDashboardTab={activeDashboardTab}
+        setActiveDashboardTab={setActiveDashboardTab}
+        refreshContracts={async () => {
+          const data = await fetch('/api/contracts').then(r => r.json()).catch(() => [])
+          setContracts(data)
+        }}
       />
     )
   }
@@ -436,28 +446,31 @@ function LoginView({ onLogin }: { onLogin: (u: DemoUser) => void }) {
 
 function DashboardView({
   user, contracts, search, setSearch, loadingContracts,
-  onInspect, onLogout,
+  onInspect, onLogout, activeDashboardTab, setActiveDashboardTab, refreshContracts,
 }: {
   user: DemoUser; contracts: Contract[]; search: string; setSearch: (s: string) => void
   loadingContracts: boolean; onInspect: (c: Contract, k: 'pickup' | 'return') => void
-  onLogout: () => void
+  onLogout: () => void; activeDashboardTab: 'checkouts' | 'checkins' | 'archive'
+  setActiveDashboardTab: (t: 'checkouts' | 'checkins' | 'archive') => void
+  refreshContracts: () => Promise<void>
 }) {
-  const [tab, setTab] = useState<'checkins' | 'checkouts' | 'archive'>('checkins')
+  const [tab, setTab] = useState<'checkouts' | 'checkins' | 'archive'>(activeDashboardTab)
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [uploadingExcel, setUploadingExcel] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Check-ins: contracts with no pickup inspection done yet (or active without return)
-  const checkinContracts = contracts.filter(c =>
-    c.status !== 'completed' && (!c.inspections.find(i => i.kind === 'pickup') || c.status === 'active' || c.status === 'pickup_pending')
-  )
-  // Check-outs: contracts with pickup done but no return inspection
+  // Check-Outs: contracts needing pickup inspection (customer TAKES car)
   const checkoutContracts = contracts.filter(c =>
+    c.status !== 'completed' && !c.inspections.find(i => i.kind === 'pickup')
+  )
+  // Check-Ins: contracts with pickup done but needing return inspection (customer RETURNS car)
+  const checkinContracts = contracts.filter(c =>
     c.status !== 'completed' && c.inspections.find(i => i.kind === 'pickup') && !c.inspections.find(i => i.kind === 'return')
   )
+  // Archive: completed rentals
   const archiveContracts = contracts.filter(c => c.status === 'completed')
 
-  const filtered = (tab === 'checkins' ? checkinContracts : tab === 'checkouts' ? checkoutContracts : archiveContracts).filter(c =>
+  const filtered = (tab === 'checkouts' ? checkoutContracts : tab === 'checkins' ? checkinContracts : archiveContracts).filter(c =>
     c.reservationNumber.toLowerCase().includes(search.toLowerCase()) ||
     c.customerName.toLowerCase().includes(search.toLowerCase()) ||
     c.vehicleReg.toLowerCase().includes(search.toLowerCase()) ||
@@ -475,11 +488,9 @@ function DashboardView({
       const res = await fetch('/api/import', { method: 'POST', body: formData })
       const data = await res.json()
       if (data.success) {
-        setUploadStatus(`Imported ${data.imported} of ${data.total} contracts`)
+        setUploadStatus(`Imported ${data.imported} of ${data.total} contracts (${data.type || 'unknown'})`)
         // Reload contracts
-        const updated = await fetch('/api/contracts').then(r => r.json()).catch(() => [])
-        // Force page reload to get fresh state
-        window.location.reload()
+        await refreshContracts()
       } else {
         setUploadStatus('Import failed: ' + (data.error || 'Unknown error'))
       }
@@ -545,8 +556,8 @@ function DashboardView({
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: 'Check-Ins', value: checkinContracts.length, icon: ArrowDownLeft, color: 'text-blue-600 bg-blue-50' },
             { label: 'Check-Outs', value: checkoutContracts.length, icon: ArrowUpRight, color: 'text-purple-600 bg-purple-50' },
+            { label: 'Check-Ins', value: checkinContracts.length, icon: ArrowDownLeft, color: 'text-blue-600 bg-blue-50' },
             { label: 'Completed', value: archiveContracts.length, icon: CheckCircle2, color: 'text-green-600 bg-green-50' },
             { label: 'Total Inspections', value: contracts.reduce((acc, c) => acc + c.inspections.length, 0), icon: Video, color: 'text-amber-600 bg-amber-50' },
           ].map(stat => (
@@ -564,22 +575,22 @@ function DashboardView({
           ))}
         </div>
 
-        {/* Tabs: Check-Ins | Check-Outs | Archive */}
+        {/* Tabs: Check-Outs | Check-Ins | Archive */}
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <button
-              onClick={() => setTab('checkins')}
-              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkins' ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
-            >
-              <ArrowDownLeft className="w-4 h-4 inline mr-1" />
-              Check-Ins ({checkinContracts.length})
-            </button>
             <button
               onClick={() => setTab('checkouts')}
               className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkouts' ? 'bg-purple-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
             >
               <ArrowUpRight className="w-4 h-4 inline mr-1" />
               Check-Outs ({checkoutContracts.length})
+            </button>
+            <button
+              onClick={() => setTab('checkins')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkins' ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+              <ArrowDownLeft className="w-4 h-4 inline mr-1" />
+              Check-Ins ({checkinContracts.length})
             </button>
             <button
               onClick={() => setTab('archive')}
@@ -627,7 +638,7 @@ function DashboardView({
         {/* Contracts List */}
         <Card className="bg-white border-slate-200">
           <CardHeader>
-            <CardTitle className="text-lg">{tab === 'checkins' ? 'Check-Ins Queue' : tab === 'checkouts' ? 'Check-Outs Queue' : 'Completed Archive'}</CardTitle>
+            <CardTitle className="text-lg">{tab === 'checkouts' ? 'Check-Outs Queue' : tab === 'checkins' ? 'Check-Ins Queue' : 'Completed Archive'}</CardTitle>
             <CardDescription>{filtered.length} contract{filtered.length !== 1 ? 's' : ''} found</CardDescription>
           </CardHeader>
           <CardContent>
@@ -710,21 +721,21 @@ function DashboardView({
                               <Badge className="bg-slate-100 text-slate-600 text-xs">
                                 <FileText className="w-3 h-3 mr-1" /> Archived
                               </Badge>
-                            ) : tab === 'checkins' ? (
+                            ) : tab === 'checkouts' ? (
                               <Button
                                 size="sm"
-                                className="text-xs bg-blue-500 hover:bg-blue-600 text-white"
+                                className="text-xs bg-purple-500 hover:bg-purple-600 text-white"
                                 onClick={() => onInspect(contract, 'pickup')}
                               >
-                                <ArrowDownLeft className="w-3 h-3 mr-1" /> Start Check-In
+                                <ArrowUpRight className="w-3 h-3 mr-1" /> Start Check-Out
                               </Button>
                             ) : (
                               <Button
                                 size="sm"
-                                className="text-xs bg-purple-500 hover:bg-purple-600 text-white"
+                                className="text-xs bg-blue-500 hover:bg-blue-600 text-white"
                                 onClick={() => onInspect(contract, 'return')}
                               >
-                                <ArrowUpRight className="w-3 h-3 mr-1" /> Start Check-Out
+                                <ArrowDownLeft className="w-3 h-3 mr-1" /> Start Check-In
                               </Button>
                             )}
                           </div>
@@ -1076,7 +1087,7 @@ function ReportView({
 }: {
   contract: Contract; userRole: string; onBack: () => void; onComplete: () => void
 }) {
-  const [signerName, setSignerName] = useState('')
+  const [signerName, setSignerName] = useState(contract.customerName || '')
   const [hasStrokes, setHasStrokes] = useState(false)
   const [overrideNotes, setOverrideNotes] = useState('')
   const [showOverride, setShowOverride] = useState(false)
