@@ -248,34 +248,27 @@ function LoginView({ onLogin }: { onLogin: () => void }) {
     setError('')
     setLoading(true)
     try {
-      const res = await fetch('/api/auth/callback/credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ email, password, callbackUrl: '/' }),
-      })
-      if (res.ok) {
-        // Use NextAuth client-side signIn
-        const { signIn } = await import('next-auth/react')
-        const result = await signIn('credentials', { email, password, redirect: false })
-        if (result?.ok) {
-          onLogin()
-        } else {
-          setError('Invalid credentials. Try a demo account.')
-        }
+      // Demo mode: validate against hardcoded credentials
+      const demoUsers = [
+        { email: 'staff@hertzmalta.com', password: 'demo123', role: 'STAFF' },
+        { email: 'manager@hertzmalta.com', password: 'demo123', role: 'MANAGER' },
+        { email: 'admin@hertzmalta.com', password: 'demo123', role: 'ADMIN' },
+      ]
+      const user = demoUsers.find(u => u.email === email && u.password === password)
+      if (user) {
+        // Store session in localStorage for demo
+        localStorage.setItem('hertz-session', JSON.stringify({
+          email: user.email,
+          role: user.role,
+          name: email === 'staff@hertzmalta.com' ? 'Maria Borg' : email === 'manager@hertzmalta.com' ? 'Mark Vella' : 'Claire Farrugia',
+          loggedAt: new Date().toISOString()
+        }))
+        onLogin()
+      } else {
+        setError('Invalid credentials. Use any demo email + password "demo123"')
       }
     } catch {
-      // Fallback: try direct signIn
-      try {
-        const { signIn } = await import('next-auth/react')
-        const result = await signIn('credentials', { email, password, redirect: false })
-        if (result?.ok) {
-          onLogin()
-        } else {
-          setError('Invalid credentials. Try a demo account.')
-        }
-      } catch {
-        setError('An unexpected error occurred.')
-      }
+      setError('An unexpected error occurred.')
     } finally {
       setLoading(false)
     }
