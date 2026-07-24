@@ -1,4 +1,3 @@
-import { auth } from "@/lib/auth"
 import type { UserRole } from "@/lib/types"
 import { NextResponse } from "next/server"
 
@@ -24,62 +23,47 @@ export type AuthSession = {
 
 /**
  * Get the current server-side session with typed user role.
- * Returns null if not authenticated.
+ * In demo mode, returns null (auth is client-side via localStorage).
  */
 export async function getServerSession(): Promise<AuthSession | null> {
-  const session = await auth()
-  if (!session?.user) {
-    return null
-  }
-  return session as unknown as AuthSession
+  // Demo mode: no server-side auth
+  return null
 }
 
 /**
  * Require authentication. Throws a 401 error if no session.
- * Use in API route handlers and server components.
+ * In demo mode, always returns a default session.
  */
 export async function requireAuth(): Promise<AuthSession> {
-  const session = await getServerSession()
-  if (!session) {
-    throw new AuthError("Authentication required", 401)
+  // Demo mode: allow all access
+  return {
+    user: {
+      id: 'demo',
+      email: 'demo@hertzmalta.com',
+      name: 'Demo User',
+      role: 'admin',
+    },
+    expires: new Date(Date.now() + 86400000).toISOString(),
   }
-  return session
 }
 
 /**
- * Require a minimum role level. Throws 403 if role is insufficient.
- * Hierarchy: staff < manager < admin
+ * Require a minimum role level.
+ * In demo mode, always passes.
  */
 export async function requireRole(
   minRole: "staff" | "manager" | "admin"
 ): Promise<AuthSession> {
-  const session = await requireAuth()
-  const userLevel = ROLE_LEVELS[session.user.role]
-  const requiredLevel = ROLE_LEVELS[minRole]
-
-  if (userLevel < requiredLevel) {
-    throw new AuthError(
-      `Insufficient permissions. Required: ${minRole}, got: ${session.user.role}`,
-      403
-    )
-  }
-
-  return session
+  return requireAuth()
 }
 
 /**
  * Check if a session has the given role or higher.
- * Returns false if not authenticated or insufficient role.
  */
 export async function hasRole(
   minRole: "staff" | "manager" | "admin"
 ): Promise<boolean> {
-  try {
-    await requireRole(minRole)
-    return true
-  } catch {
-    return false
-  }
+  return true
 }
 
 /**
