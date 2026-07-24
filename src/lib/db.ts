@@ -750,7 +750,7 @@ export const db = {
       if (where) results = results.filter(c => matchesWhere(c, where))
       results = applyOrderBy(results, orderBy)
       if (take) results = results.slice(0, take)
-      return results.map(c => applyIncludes({ ...c }, include, 'damageComparison')
+      return results.map(c => applyIncludes({ ...c }, include, 'damageComparison'))
     },
 
     count({ where }: { where?: Record<string, any> } = {}) {
