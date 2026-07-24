@@ -39,7 +39,7 @@ export async function POST(
       include: { contract: { include: { inspections: { include: { damageReport: true } } } } },
     });
 
-    if (!video) {
+    if (!video || !video.contract) {
       return NextResponse.json({ error: 'Inspection not found' }, { status: 404 });
     }
 
@@ -66,8 +66,9 @@ export async function POST(
 
     // Check if comparison is possible
     const otherKind = video.kind === 'pickup' ? 'return' : 'pickup';
-    const otherVideo = video.contract.inspections.find((v) => v.kind === otherKind);
-    let comparison = null;
+    const contractInspections = video.contract.inspections || [];
+    const otherVideo = contractInspections.find((v: any) => v.kind === otherKind);
+    let comparison: any = null;
 
     if (otherVideo?.damageReport) {
       const pickupReport = video.kind === 'pickup' ? report : otherVideo.damageReport;

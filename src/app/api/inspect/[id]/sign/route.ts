@@ -23,7 +23,7 @@ export async function POST(
       include: { contract: true },
     });
 
-    if (!video) {
+    if (!video || !video.contract) {
       return NextResponse.json({ error: 'Inspection not found' }, { status: 404 });
     }
 
