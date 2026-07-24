@@ -459,15 +459,12 @@ function DashboardView({
   const [uploadingExcel, setUploadingExcel] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Check-Outs: contracts needing pickup inspection (customer TAKES car)
-  const checkoutContracts = contracts.filter(c =>
-    c.status !== 'completed' && !c.inspections.find(i => i.kind === 'pickup')
-  )
-  // Check-Ins: contracts with pickup done but needing return inspection (customer RETURNS car)
-  const checkinContracts = contracts.filter(c =>
-    c.status !== 'completed' && c.inspections.find(i => i.kind === 'pickup') && !c.inspections.find(i => i.kind === 'return')
-  )
-  // Archive: completed rentals
+  // Filter by STATUS (set during Excel import):
+  //   checkout_pending = uploaded from Check-outs file → Check-Outs tab
+  //   checkin_pending  = uploaded from Check-ins file  → Check-Ins tab
+  //   completed        = after return inspection signed → Archive
+  const checkoutContracts = contracts.filter(c => c.status === 'checkout_pending')
+  const checkinContracts = contracts.filter(c => c.status === 'checkin_pending')
   const archiveContracts = contracts.filter(c => c.status === 'completed')
 
   const filtered = (tab === 'checkouts' ? checkoutContracts : tab === 'checkins' ? checkinContracts : archiveContracts).filter(c =>
