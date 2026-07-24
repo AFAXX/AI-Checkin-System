@@ -1,0 +1,156 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Existing models (DO NOT MODIFY) ───────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Enums ─────────────────────────────────────────────────────────────────
+
+enum VideoKind {
+  pickup
+  return
+}
+
+enum VideoStatus {
+  pending_upload
+  uploading
+  processing
+  completed
+  failed
+}
+
+enum InspectionStatus {
+  awaiting_pickup_video
+  pickup_processing
+  awaiting_return_video
+  return_processing
+  awaiting_signature
+  completed
+}
+
+enum DamageSeverity {
+  low
+  medium
+  high
+}
+
+enum UserRole {
+  staff
+  manager
+  admin
+}
+
+// ─── Staff / Auth ───────────────────────────────────────────────────────────
+
+model StaffUser {
+  id            String    @id @default(cuid())
+  entraOid      String    @unique
+  email         String    @unique
+  displayName   String
+  role          UserRole  @default(staff)
+  locationCode  String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  inspections   CheckinVideo[]
+  reviews       DamageComparison[]
+}
+
+// ─── Rental Contract ────────────────────────────────────────────────────────
+
+model Contract {
+  id            String   @id @default(cuid())
+  reservationNumber String @unique
+  customerName  String
+  customerEmail String
+  vehicleReg    String
+  vehicleModel  String
+  pickupDate    DateTime
+  returnDate    DateTime?
+  status        String   @default("active")
+  locationCode  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  inspections   CheckinVideo[]
+  comparisons   DamageComparison[]
+}
+
+// ─── Check-in Video ────────────────────────────────────────────────────────
+
+model CheckinVideo {
+  id              String       @id @default(cuid())
+  contractId      String
+  contract        Contract     @relation(fields: [contractId], references: [id])
+  kind            VideoKind
+  storageUrl      String?
+  storageProvider String?
+  duration        Int?
+  sizeBytes       Int?
+  status          VideoStatus  @default(pending_upload)
+  tusUploadId     String?      @unique
+  recordedById    String?
+  recordedBy      StaffUser?   @relation(fields: [recordedById], references: [id])
+  errorMessage    String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  damageReport    DamageReport?
+
+  @@index([contractId, kind])
+  @@index([status])
+}
+
+// ─── Damage Report ──────────────────────────────────────────────────────────
+
+model DamageReport {
+  id               String          @id @default(cuid())
+  checkinVideoId   String          @unique
+  checkinVideo     CheckinVideo    @relation(fields: [checkinVideoId], references: [id])
+  modelVersion     String
+  rawJsonUrl       String?
+  damages          String          // JSON string of damage detections
+  frameCount       Int?
+  processingMs     Int?
+  createdAt        DateTime        @default(now())
+  pickupComparison DamageComparison? @relation("PickupReport")
+  returnComparison DamageComparison? @relation("ReturnReport")
+}
+
+// ─── Damage Comparison (Pickup vs Return) ────────────────────────────────────
+
+model DamageComparison {
+  id                 String           @id @default(cuid())
+  contractId         String
+  contract           Contract         @relation(fields: [contractId], references: [id])
+  pickupReportId     String           @unique
+  pickupReport       DamageReport     @relation("PickupReport", fields: [pickupReportId], references: [id])
+  returnReportId     String           @unique
+  returnReport       DamageReport     @relation("ReturnReport", fields: [returnReportId], references: [id])
+  newDamages         String          // JSON string
+  preExistingDamages String          // JSON string
+  signatureUrl       String?
+  signedAt           DateTime?
+  signedByName       String?
+  reviewedById       String?
+  reviewedBy         StaffUser?       @relation(fields: [reviewedById], references: [id])
+  reviewedAt         DateTime?
+  status             InspectionStatus @default(awaiting_signature)
+  overrideNotes      String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([contractId])
+  @@index([status])
+}
