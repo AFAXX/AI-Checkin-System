@@ -24,10 +24,22 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
-    const type = (formData.get('type') as string) || 'checkout';
 
     if (!file) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    }
+
+    // Auto-detect type from filename if not explicitly provided
+    let type = (formData.get('type') as string) || '';
+    if (!type) {
+      const fname = file.name.toLowerCase();
+      if (fname.includes('check-in') || fname.includes('checkin') || fname.includes('check in')) {
+        type = 'checkin';
+      } else if (fname.includes('check-out') || fname.includes('checkout') || fname.includes('check out')) {
+        type = 'checkout';
+      } else {
+        type = 'checkout'; // default fallback
+      }
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
