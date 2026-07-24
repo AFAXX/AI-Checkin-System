@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useSession, signOut } from 'next-auth/react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Card, CardContent, CardHeader, CardTitle, CardDescription,
@@ -71,7 +70,29 @@ interface Comparison {
   signedAt: string | null
 }
 
+interface DemoUser {
+  email: string
+  name: string
+  role: string
+}
+
 type View = 'login' | 'dashboard' | 'inspect' | 'report' | 'success'
+
+// ─── Demo session helpers ──────────────────────────────────────────────────
+
+function getDemoUser(): DemoUser | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem('hertz-session')
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return null
+}
+
+function clearDemoUser() {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem('hertz-session')
+}
 
 // ─── Severity helpers ──────────────────────────────────────────────────────
 
@@ -124,7 +145,7 @@ function statusLabel(s: string) {
 // ─── Main App ───────────────────────────────────────────────────────────────
 
 export default function HomePage() {
-  const { data: session, status } = useSession()
+  const [user, setUser] = useState<DemoUser | null>(null)
   const [view, setView] = useState<View>('login')
   const [contracts, setContracts] = useState<Contract[]>([])
   const [search, setSearch] = useState('')
@@ -132,28 +153,37 @@ export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'pickup' | 'return'>('pickup')
   const [loadingContracts, setLoadingContracts] = useState(false)
 
-  // Redirect to dashboard on session
+  // Check localStorage on mount
   useEffect(() => {
-    if (session) {
-      const timer = setTimeout(() => setView('dashboard'), 0)
-      return () => clearTimeout(timer)
+    const saved = getDemoUser()
+    if (saved) {
+      setUser(saved)
+      setView('dashboard')
     }
-  }, [session])
+  }, [])
 
   // Fetch contracts on dashboard
   useEffect(() => {
     let cancelled = false
     if (view !== 'dashboard') return
+    setLoadingContracts(true)
     const loadContracts = async () => {
       const data = await fetch('/api/contracts').then(r => r.json()).catch(() => [])
-      if (!cancelled) setContracts(data)
+      if (!cancelled) { setContracts(data); setLoadingContracts(false) }
     }
     loadContracts()
     return () => { cancelled = true }
   }, [view])
 
-  const handleLogout = async () => {
-    await signOut({ redirect: false })
+  const handleLogin = (u: DemoUser) => {
+    setUser(u)
+    localStorage.setItem('hertz-session', JSON.stringify(u))
+    setView('dashboard')
+  }
+
+  const handleLogout = () => {
+    clearDemoUser()
+    setUser(null)
     setView('login')
   }
 
@@ -165,8 +195,8 @@ export default function HomePage() {
 
   // ─── LOGIN VIEW ─────────────────────────────────────────────────────────
 
-  if (!session || view === 'login') {
-    return <LoginView onLogin={() => setView('dashboard')} />
+  if (!user || view === 'login') {
+    return <LoginView onLogin={handleLogin} />
   }
 
   // ─── DASHBOARD VIEW ─────────────────────────────────────────────────────
@@ -174,7 +204,7 @@ export default function HomePage() {
   if (view === 'dashboard') {
     return (
       <DashboardView
-        session={session}
+        user={user}
         contracts={contracts}
         search={search}
         setSearch={setSearch}
@@ -192,7 +222,7 @@ export default function HomePage() {
       <InspectionView
         contract={selectedContract}
         kind={activeTab}
-        userRole={session.user.role as string}
+        userRole={user.role}
         onBack={() => setView('dashboard')}
         onComplete={() => setView('report')}
       />
@@ -205,7 +235,7 @@ export default function HomePage() {
     return (
       <ReportView
         contract={selectedContract}
-        userRole={session.user.role as string}
+        userRole={user.role}
         onBack={() => setView('dashboard')}
         onComplete={() => setView('success')}
       />
@@ -220,7 +250,17 @@ export default function HomePage() {
         contract={selectedContract}
         onBack={() => setView('dashboard')}
       />
-    function LoginView({ onLogin }: { onLogin: () => void }) {
+    )
+  }
+
+  return null
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOGIN VIEW
+// ═══════════════════════════════════════════════════════════════════════════
+
+function LoginView({ onLogin }: { onLogin: (u: DemoUser) => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -238,20 +278,15 @@ export default function HomePage() {
     setError('')
     setLoading(true)
     try {
+      // Demo mode: validate against hardcoded credentials
       const demoUsers = [
-        { email: 'staff@hertzmalta.com', password: 'demo123', role: 'STAFF' },
-        { email: 'manager@hertzmalta.com', password: 'demo123', role: 'MANAGER' },
-        { email: 'admin@hertzmalta.com', password: 'demo123', role: 'ADMIN' },
+        { email: 'staff@hertzmalta.com', password: 'demo123', role: 'STAFF', name: 'Maria Borg' },
+        { email: 'manager@hertzmalta.com', password: 'demo123', role: 'MANAGER', name: 'Mark Vella' },
+        { email: 'admin@hertzmalta.com', password: 'demo123', role: 'ADMIN', name: 'Claire Farrugia' },
       ]
       const user = demoUsers.find(u => u.email === email && u.password === password)
       if (user) {
-        localStorage.setItem('hertz-session', JSON.stringify({
-          email: user.email,
-          role: user.role,
-          name: email === 'staff@hertzmalta.com' ? 'Maria Borg' : email === 'manager@hertzmalta.com' ? 'Mark Vella' : 'Claire Farrugia',
-          loggedAt: new Date().toISOString()
-        }))
-        onLogin()
+        onLogin({ email: user.email, name: user.name, role: user.role })
       } else {
         setError('Invalid credentials. Use any demo email + password "demo123"')
       }
@@ -398,10 +433,10 @@ export default function HomePage() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function DashboardView({
-  session, contracts, search, setSearch, loadingContracts,
+  user, contracts, search, setSearch, loadingContracts,
   onInspect, onLogout,
 }: {
-  session: any; contracts: Contract[]; search: string; setSearch: (s: string) => void
+  user: DemoUser; contracts: Contract[]; search: string; setSearch: (s: string) => void
   loadingContracts: boolean; onInspect: (c: Contract, k: 'pickup' | 'return') => void
   onLogout: () => void
 }) {
@@ -427,18 +462,18 @@ function DashboardView({
           <div className="flex items-center gap-3">
             <div className="hidden sm:flex items-center gap-2 text-sm">
               <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-xs font-bold text-slate-700">
-                {session.user.name?.charAt(0) || 'U'}
+                {user.name?.charAt(0) || 'U'}
               </div>
               <div className="text-right">
-                <p className="font-medium text-slate-900 text-sm leading-tight">{session.user.name}</p>
-                <p className="text-xs text-slate-500">{session.user.email}</p>
+                <p className="font-medium text-slate-900 text-sm leading-tight">{user.name}</p>
+                <p className="text-xs text-slate-500">{user.email}</p>
               </div>
               <Badge className={
-                session.user.role === 'admin' ? 'bg-red-100 text-red-800' :
-                session.user.role === 'manager' ? 'bg-amber-100 text-amber-800' :
+                user.role === 'ADMIN' ? 'bg-red-100 text-red-800' :
+                user.role === 'MANAGER' ? 'bg-amber-100 text-amber-800' :
                 'bg-slate-100 text-slate-700'
               }>
-                {session.user.role}
+                {user.role}
               </Badge>
             </div>
             <Button variant="outline" size="sm" onClick={onLogout} className="text-slate-600">
@@ -759,7 +794,6 @@ function InspectionView({
         >
           <Card className="bg-black overflow-hidden border-slate-700">
             <div className="relative aspect-video bg-slate-900 flex items-center justify-center">
-              {/* Video preview / placeholder */}
               <video
                 ref={videoRef}
                 className="w-full h-full object-cover"
@@ -776,7 +810,6 @@ function InspectionView({
                 </div>
               )}
 
-              {/* Recording indicator */}
               {isRecording && (
                 <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-600 px-3 py-1.5 rounded-full">
                   <motion.div
@@ -789,7 +822,6 @@ function InspectionView({
                 </div>
               )}
 
-              {/* Processing overlay */}
               <AnimatePresence>
                 {isProcessing && (
                   <motion.div
@@ -820,7 +852,6 @@ function InspectionView({
               </AnimatePresence>
             </div>
 
-            {/* Controls */}
             <div className="p-4 bg-slate-900 flex items-center justify-center gap-4">
               {!isRecording && !isProcessing && damages.length === 0 && (
                 <Button
@@ -904,7 +935,6 @@ function InspectionView({
                 </CardContent>
               </Card>
 
-              {/* Action button */}
               <div className="mt-6 flex justify-center">
                 <Button
                   onClick={onComplete}
@@ -944,7 +974,6 @@ function ReportView({
   const isDrawingRef = useRef(false)
   const lastPosRef = useRef({ x: 0, y: 0 })
 
-  // Mock data for comparison
   const newDamages: DamageItem[] = [
     { id: 'n1', class: 'Dent', severity: 'high', confidence: 92, location: 'Rear bumper', bbox: { x: 300, y: 150, width: 120, height: 100 }, frameIndex: 2 },
     { id: 'n2', class: 'Crack', severity: 'medium', confidence: 78, location: 'Windshield', bbox: { x: 200, y: 50, width: 200, height: 60 }, frameIndex: 5 },
@@ -954,17 +983,14 @@ function ReportView({
     { id: 'p2', class: 'Tire Damage', severity: 'low', confidence: 85, location: 'Front left tire', bbox: { x: 400, y: 300, width: 100, height: 100 }, frameIndex: 8 },
   ]
 
-  // Canvas drawing
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-
     const rect = canvas.getBoundingClientRect()
     canvas.width = rect.width
     canvas.height = rect.height
-
     ctx.fillStyle = '#FFFFFF'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     ctx.strokeStyle = '#1a1a1a'
@@ -995,7 +1021,6 @@ function ReportView({
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-
     const pos = getPos(e)
     ctx.beginPath()
     ctx.moveTo(lastPosRef.current.x, lastPosRef.current.y)
@@ -1004,9 +1029,7 @@ function ReportView({
     lastPosRef.current = pos
   }, [getPos])
 
-  const endDraw = useCallback(() => {
-    isDrawingRef.current = false
-  }, [])
+  const endDraw = useCallback(() => { isDrawingRef.current = false }, [])
 
   const clearCanvas = useCallback(() => {
     const canvas = canvasRef.current
@@ -1020,7 +1043,6 @@ function ReportView({
 
   const handleSubmit = async () => {
     setSubmitting(true)
-    // Simulate submission
     await new Promise(r => setTimeout(r, 1500))
     setSubmitting(false)
     onComplete()
@@ -1030,7 +1052,6 @@ function ReportView({
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
-      {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -1052,7 +1073,6 @@ function ReportView({
       <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-6 space-y-6">
         {/* Two-column comparison */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* New Damages */}
           <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
             <Card className="border-red-200 bg-white">
               <CardHeader className="bg-red-50 rounded-t-lg">
@@ -1064,12 +1084,7 @@ function ReportView({
               </CardHeader>
               <CardContent className="p-4 space-y-3">
                 {newDamages.map((damage, idx) => (
-                  <motion.div
-                    key={damage.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.15 }}
-                  >
+                  <motion.div key={damage.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.15 }}>
                     <div className={`p-4 rounded-lg border ${severityColor(damage.severity)}`}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -1077,15 +1092,13 @@ function ReportView({
                           <div>
                             <p className="font-semibold text-sm">{damage.class}</p>
                             <p className="text-xs text-slate-600 flex items-center gap-1 mt-0.5">
-                              <MapPin className="w-3 h-3" />
-                              {damage.location}
+                              <MapPin className="w-3 h-3" />{damage.location}
                             </p>
                           </div>
                         </div>
                         <div className="text-right">
                           <Badge className={`${severityColor(damage.severity)} text-xs`}>
-                            {severityIcon(damage.severity)}
-                            <span className="ml-1 capitalize">{damage.severity}</span>
+                            {severityIcon(damage.severity)}<span className="ml-1 capitalize">{damage.severity}</span>
                           </Badge>
                           <p className="text-xs text-slate-500 mt-1">{damage.confidence}%</p>
                         </div>
@@ -1097,7 +1110,6 @@ function ReportView({
             </Card>
           </motion.div>
 
-          {/* Pre-existing */}
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
             <Card className="border-amber-200 bg-white">
               <CardHeader className="bg-amber-50 rounded-t-lg">
@@ -1109,12 +1121,7 @@ function ReportView({
               </CardHeader>
               <CardContent className="p-4 space-y-3">
                 {preExisting.map((damage, idx) => (
-                  <motion.div
-                    key={damage.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.15 }}
-                  >
+                  <motion.div key={damage.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.15 }}>
                     <div className={`p-4 rounded-lg border ${severityColor(damage.severity)}`}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -1122,15 +1129,13 @@ function ReportView({
                           <div>
                             <p className="font-semibold text-sm">{damage.class}</p>
                             <p className="text-xs text-slate-600 flex items-center gap-1 mt-0.5">
-                              <MapPin className="w-3 h-3" />
-                              {damage.location}
+                              <MapPin className="w-3 h-3" />{damage.location}
                             </p>
                           </div>
                         </div>
                         <div className="text-right">
                           <Badge className={`${severityColor(damage.severity)} text-xs`}>
-                            {severityIcon(damage.severity)}
-                            <span className="ml-1 capitalize">{damage.severity}</span>
+                            {severityIcon(damage.severity)}<span className="ml-1 capitalize">{damage.severity}</span>
                           </Badge>
                           <p className="text-xs text-slate-500 mt-1">{damage.confidence}%</p>
                         </div>
@@ -1144,7 +1149,7 @@ function ReportView({
         </div>
 
         {/* Manager Override */}
-        {(userRole === 'manager' || userRole === 'admin') && (
+        {(userRole === 'MANAGER' || userRole === 'ADMIN') && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
             <Card className="bg-white border-slate-200">
               <CardContent className="p-0">
@@ -1201,7 +1206,6 @@ function ReportView({
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Customer name */}
               <div className="space-y-2">
                 <Label htmlFor="signerName">Customer Full Name *</Label>
                 <Input
@@ -1213,7 +1217,6 @@ function ReportView({
                 />
               </div>
 
-              {/* Signature Canvas */}
               <div className="space-y-2">
                 <Label>Signature *</Label>
                 <div className="relative border-2 border-slate-300 rounded-lg overflow-hidden" style={{ height: 200 }}>
@@ -1234,17 +1237,11 @@ function ReportView({
                     </div>
                   )}
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={clearCanvas}
-                  className="text-xs text-slate-500"
-                >
+                <Button variant="outline" size="sm" onClick={clearCanvas} className="text-xs text-slate-500">
                   <RotateCcw className="w-3 h-3 mr-1" /> Clear Signature
                 </Button>
               </div>
 
-              {/* Submit */}
               <div className="pt-2">
                 <Button
                   onClick={handleSubmit}
@@ -1252,21 +1249,13 @@ function ReportView({
                   className="w-full sm:w-auto bg-amber-500 hover:bg-amber-600 text-white font-semibold h-12 px-8"
                 >
                   {submitting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Submitting...
-                    </>
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Submitting...</>
                   ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4 mr-2" />
-                      Complete Inspection
-                    </>
+                    <><CheckCircle2 className="w-4 h-4 mr-2" /> Complete Inspection</>
                   )}
                 </Button>
                 {!canSubmit && (
-                  <p className="text-xs text-slate-400 mt-2">
-                    Both customer name and signature are required to complete.
-                  </p>
+                  <p className="text-xs text-slate-400 mt-2">Both customer name and signature are required to complete.</p>
                 )}
               </div>
             </CardContent>
