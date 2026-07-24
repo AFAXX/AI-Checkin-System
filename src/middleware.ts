@@ -1,24 +1,16 @@
-import { auth } from "@/lib/auth"
 import { NextResponse } from "next/server"
+import type { NextRequest } from "next/server"
 
-export default auth((req) => {
+// Lightweight middleware - no NextAuth dependency to avoid env var issues
+// Auth is handled client-side with the demo mode
+export default function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
-  const isLoggedIn = !!req.auth
 
-  // Public routes that don't require authentication
-  const publicRoutes = ["/", "/api/auth-handler"]
-  const isPublicRoute = publicRoutes.some((route) => pathname.startsWith(route))
-
-  // API routes for auth are always allowed
-  if (pathname.startsWith("/api/auth-handler")) {
-    return NextResponse.next()
-  }
-
-  // Log auth status for demo visibility (permissive mode for sandbox)
-  console.log(`[Auth Middleware] ${pathname} | authenticated: ${isLoggedIn}`)
+  // Log for demo visibility
+  console.log(`[Middleware] ${pathname}`)
 
   return NextResponse.next()
-})
+}
 
 export const config = {
   matcher: [
