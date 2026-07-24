@@ -18,7 +18,9 @@ import {
   ChevronLeft, CheckCircle2, AlertTriangle, AlertOctagon, CircleDot,
   PenLine, RotateCcw, ArrowRight, FileText, Users, BarChart3,
   Clock, MapPin, Signpost, Wrench, Upload, Sparkles, X,
+  ArrowDownLeft, ArrowUpRight, UploadCloud, FileSpreadsheet, Archive,
 } from 'lucide-react'
+import * as XLSX from 'xlsx'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -440,10 +442,54 @@ function DashboardView({
   loadingContracts: boolean; onInspect: (c: Contract, k: 'pickup' | 'return') => void
   onLogout: () => void
 }) {
-  const filtered = contracts.filter(c =>
-    c.reservationNumber.toLowerCase().includes(search.toLowerCase()) ||
-    c.customerName.toLowerCase().includes(search.toLowerCase())
+  const [tab, setTab] = useState<'checkins' | 'checkouts' | 'archive'>('checkins')
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null)
+  const [uploadingExcel, setUploadingExcel] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Check-ins: contracts with no pickup inspection done yet (or active without return)
+  const checkinContracts = contracts.filter(c =>
+    c.status !== 'completed' && (!c.inspections.find(i => i.kind === 'pickup') || c.status === 'active' || c.status === 'pickup_pending')
   )
+  // Check-outs: contracts with pickup done but no return inspection
+  const checkoutContracts = contracts.filter(c =>
+    c.status !== 'completed' && c.inspections.find(i => i.kind === 'pickup') && !c.inspections.find(i => i.kind === 'return')
+  )
+  const archiveContracts = contracts.filter(c => c.status === 'completed')
+
+  const filtered = (tab === 'checkins' ? checkinContracts : tab === 'checkouts' ? checkoutContracts : archiveContracts).filter(c =>
+    c.reservationNumber.toLowerCase().includes(search.toLowerCase()) ||
+    c.customerName.toLowerCase().includes(search.toLowerCase()) ||
+    c.vehicleReg.toLowerCase().includes(search.toLowerCase()) ||
+    c.vehicleModel.toLowerCase().includes(search.toLowerCase())
+  )
+
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingExcel(true)
+    setUploadStatus(null)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/import', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (data.success) {
+        setUploadStatus(`Imported ${data.imported} of ${data.total} contracts`)
+        // Reload contracts
+        const updated = await fetch('/api/contracts').then(r => r.json()).catch(() => [])
+        // Force page reload to get fresh state
+        window.location.reload()
+      } else {
+        setUploadStatus('Import failed: ' + (data.error || 'Unknown error'))
+      }
+    } catch (err) {
+      setUploadStatus('Upload error: ' + String(err))
+    } finally {
+      setUploadingExcel(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
@@ -499,10 +545,10 @@ function DashboardView({
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { label: 'Active Contracts', value: contracts.filter(c => c.status === 'active').length, icon: FileText, color: 'text-blue-600 bg-blue-50' },
-            { label: 'Pending Inspections', value: contracts.filter(c => c.inspections.length === 0).length, icon: Clock, color: 'text-amber-600 bg-amber-50' },
-            { label: 'Completed Today', value: contracts.filter(c => c.status === 'completed').length, icon: CheckCircle2, color: 'text-green-600 bg-green-50' },
-            { label: 'Total Inspections', value: contracts.reduce((acc, c) => acc + c.inspections.length, 0), icon: Video, color: 'text-purple-600 bg-purple-50' },
+            { label: 'Check-Ins', value: checkinContracts.length, icon: ArrowDownLeft, color: 'text-blue-600 bg-blue-50' },
+            { label: 'Check-Outs', value: checkoutContracts.length, icon: ArrowUpRight, color: 'text-purple-600 bg-purple-50' },
+            { label: 'Completed', value: archiveContracts.length, icon: CheckCircle2, color: 'text-green-600 bg-green-50' },
+            { label: 'Total Inspections', value: contracts.reduce((acc, c) => acc + c.inspections.length, 0), icon: Video, color: 'text-amber-600 bg-amber-50' },
           ].map(stat => (
             <Card key={stat.label} className="bg-white border-slate-200">
               <CardContent className="p-4 flex items-center gap-3">
@@ -518,10 +564,70 @@ function DashboardView({
           ))}
         </div>
 
+        {/* Tabs: Check-Ins | Check-Outs | Archive */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setTab('checkins')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkins' ? 'bg-blue-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+              <ArrowDownLeft className="w-4 h-4 inline mr-1" />
+              Check-Ins ({checkinContracts.length})
+            </button>
+            <button
+              onClick={() => setTab('checkouts')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'checkouts' ? 'bg-purple-500 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+              <ArrowUpRight className="w-4 h-4 inline mr-1" />
+              Check-Outs ({checkoutContracts.length})
+            </button>
+            <button
+              onClick={() => setTab('archive')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${tab === 'archive' ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+              <Archive className="w-4 h-4 inline mr-1" />
+              Archive ({archiveContracts.length})
+            </button>
+          </div>
+
+          <div className="flex-1" />
+
+          {/* Upload Excel Button */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleExcelUpload}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadingExcel}
+            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+          >
+            {uploadingExcel ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600" />}
+            Upload Excel
+          </Button>
+        </div>
+
+        {/* Upload status message */}
+        {uploadStatus && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`text-sm p-3 rounded-lg ${uploadStatus.startsWith('Imported') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}
+          >
+            {uploadStatus}
+            <button onClick={() => setUploadStatus(null)} className="ml-2 float-right"><X className="w-3 h-3 inline" /></button>
+          </motion.div>
+        )}
+
         {/* Contracts List */}
         <Card className="bg-white border-slate-200">
           <CardHeader>
-            <CardTitle className="text-lg">Active Contracts</CardTitle>
+            <CardTitle className="text-lg">{tab === 'checkins' ? 'Check-Ins Queue' : tab === 'checkouts' ? 'Check-Outs Queue' : 'Completed Archive'}</CardTitle>
             <CardDescription>{filtered.length} contract{filtered.length !== 1 ? 's' : ''} found</CardDescription>
           </CardHeader>
           <CardContent>
@@ -600,21 +706,27 @@ function DashboardView({
                             </div>
                           </div>
                           <div className="flex items-center gap-2 shrink-0 sm:ml-4">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => onInspect(contract, 'pickup')}
-                              className="text-xs border-blue-200 text-blue-700 hover:bg-blue-50"
-                            >
-                              Pickup
-                            </Button>
-                            <Button
-                              size="sm"
-                              className="text-xs bg-amber-500 hover:bg-amber-600 text-white"
-                              onClick={() => onInspect(contract, 'return')}
-                            >
-                              Return
-                            </Button>
+                            {tab === 'archive' ? (
+                              <Badge className="bg-slate-100 text-slate-600 text-xs">
+                                <FileText className="w-3 h-3 mr-1" /> Archived
+                              </Badge>
+                            ) : tab === 'checkins' ? (
+                              <Button
+                                size="sm"
+                                className="text-xs bg-blue-500 hover:bg-blue-600 text-white"
+                                onClick={() => onInspect(contract, 'pickup')}
+                              >
+                                <ArrowDownLeft className="w-3 h-3 mr-1" /> Start Check-In
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                className="text-xs bg-purple-500 hover:bg-purple-600 text-white"
+                                onClick={() => onInspect(contract, 'return')}
+                              >
+                                <ArrowUpRight className="w-3 h-3 mr-1" /> Start Check-Out
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </CardContent>
