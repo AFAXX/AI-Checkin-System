@@ -108,8 +108,8 @@ const Carousel = React.forwardRef<
         <div
           ref={ref}
           onKeyDownCapture={(e) => {
-            if (e.key === "ArrowLeft") carouselRef.current?.scrollPrev()
-            if (e.key === "ArrowRight") carouselRef.current?.scrollNext()
+            if (e.key === "ArrowLeft") api?.scrollPrev()
+            if (e.key === "ArrowRight") api?.scrollNext()
           }}
           className={cn("relative", className)}
           role="region"

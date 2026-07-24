@@ -1,8 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
-  // Rimosso ignoreBuildErrors per assicurarci che il codice sia solido in produzione
+  typescript: {
+    ignoreBuildErrors: false,
+  },
   reactStrictMode: false,
   experimental: {
     optimizePackageImports: [

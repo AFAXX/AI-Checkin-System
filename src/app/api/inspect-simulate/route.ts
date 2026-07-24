@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     const otherKind = video.kind === 'pickup' ? 'return' : 'pickup';
     const contractInspections = video.contract?.inspections || [];
     const otherVideo = contractInspections.find((v: any) => v.kind === otherKind);
-    let comparison = null;
+    let comparison: any = null;
 
     if (otherVideo?.damageReport) {
       const pickupReport = video.kind === 'pickup' ? report : otherVideo.damageReport;
