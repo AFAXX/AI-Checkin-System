@@ -459,6 +459,15 @@ export const db = {
       return updated
     },
 
+    delete({ where }: { where: Record<string, any> }) {
+      logQuery(`contract.delete where=${JSON.stringify(where)}`)
+      const id = where.id
+      if (!id) return null
+      const deleted = contracts.get(id as string)
+      contracts.delete(id as string)
+      return deleted || null
+    },
+
     deleteMany() {
       logQuery(`contract.deleteMany`)
       contracts.clear()
