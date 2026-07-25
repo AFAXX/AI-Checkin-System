@@ -107,7 +107,7 @@ function applyIncludes<T extends Record<string, any>>(
   context: 'staffUser' | 'contract' | 'checkinVideo' | 'damageReport' | 'damageComparison'
 ): T {
   if (!include) return item
-  const result = { ...item }
+  const result: any = { ...item }
 
   if (context === 'staffUser') {
     const user = result as unknown as StaffUser
