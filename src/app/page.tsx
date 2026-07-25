@@ -154,30 +154,45 @@ interface ParsedRow {
   returnDate: string
 }
 
+function excelDateToISO(val: any): string {
+  if (!val) return ''
+  if (val instanceof Date) return val.toISOString()
+  const num = Number(val)
+  if (!isNaN(num) && num > 40000 && num < 60000) {
+    // Excel serial date: days since 1899-12-30
+    const excelEpoch = new Date(1899, 11, 30)
+    const date = new Date(excelEpoch.getTime() + num * 86400000)
+    return date.toISOString()
+  }
+  const d = new Date(val)
+  return isNaN(d.getTime()) ? String(val) : d.toISOString()
+}
+
 function parseCheckOutsFile(buffer: ArrayBuffer): ParsedRow[] {
   const wb = XLSX.read(buffer, { type: 'array' })
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: null })
   return rows.map(row => {
-    const timeVal = row['Time']
-    const days = row['Days'] || 7
-    const pickupDate = timeVal instanceof Date ? timeVal.toISOString() : String(timeVal || '')
-    const retDate = timeVal instanceof Date
-      ? new Date(timeVal.getTime() + days * 86400000).toISOString()
-      : ''
+    const pickupDate = excelDateToISO(row['Time'])
+    const days = Number(row['Days']) || 7
+    let returnDate = ''
+    if (pickupDate) {
+      const pick = new Date(pickupDate)
+      returnDate = new Date(pick.getTime() + days * 86400000).toISOString()
+    }
     return {
       rentalNumber: String(row['Rental'] || ''),
       customerName: String(row['Customer'] || ''),
-      vehicleModel: String(row['Model'] || ''),
+      vehicleModel: String(row['Model'] || row['Group'] || ''),
       vehicleReg: String(row['Vehicle'] || ''),
       groupCode: String(row['Group'] || ''),
       fuelType: String(row['Fuel type'] || ''),
       transmission: String(row['Transmission'] || ''),
-      days: Number(days) || 7,
+      days,
       station: String(row['Station'] || ''),
       confirmation: String(row['Confirmation #'] || ''),
       pickupDate,
-      returnDate: retDate,
+      returnDate,
     }
   }).filter(r => r.rentalNumber)
 }
@@ -187,24 +202,25 @@ function parseCheckInsFile(buffer: ArrayBuffer): ParsedRow[] {
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: null })
   return rows.map(row => {
-    const timeVal = row['Time']
-    const days = row['Days'] || 7
-    const returnDate = timeVal instanceof Date ? timeVal.toISOString() : String(timeVal || '')
-    const pickDate = timeVal instanceof Date
-      ? new Date(timeVal.getTime() - days * 86400000).toISOString()
-      : ''
+    const returnDate = excelDateToISO(row['Time'])
+    const days = Number(row['Days']) || 7
+    let pickupDate = ''
+    if (returnDate) {
+      const ret = new Date(returnDate)
+      pickupDate = new Date(ret.getTime() - days * 86400000).toISOString()
+    }
     return {
       rentalNumber: String(row['Rental'] || ''),
       customerName: String(row['Customer'] || ''),
-      vehicleModel: String(row['Model'] || ''),
+      vehicleModel: String(row['Model'] || row['Group'] || ''),
       vehicleReg: String(row['Vehicle'] || ''),
       groupCode: String(row['Group'] || ''),
       fuelType: String(row['Fuel type'] || ''),
       transmission: String(row['Transmission'] || ''),
-      days: Number(days) || 7,
+      days,
       station: String(row['Station'] || ''),
       confirmation: String(row['Confirmation #'] || ''),
-      pickupDate: pickDate,
+      pickupDate,
       returnDate,
     }
   }).filter(r => r.rentalNumber)
