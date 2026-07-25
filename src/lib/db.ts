@@ -1,6 +1,7 @@
 // ─── In-Memory Database ───────────────────────────────────────────────────────
 // Drop-in replacement for Prisma Client. Works on ANY deployment platform
 // (Vercel, Netlify, Docker, VPS, etc.) without needing an external database.
+// Now with file-based persistence layer.
 
 import type {
   StaffUser, Contract, CheckinVideo, DamageReport, DamageComparison,
@@ -21,6 +22,82 @@ const checkinVideos: Map<string, CheckinVideo> = new Map()
 const damageReports: Map<string, DamageReport> = new Map()
 const damageComparisons: Map<string, DamageComparison> = new Map()
 
+// ─── Persistence Layer ──────────────────────────────────────────────────────
+// Saves to /tmp/hertz-db.json on every write. Loads on first access.
+// On Vercel serverless, this persists within warm function instances.
+// For true cross-redeploy persistence, use Vercel KV/Postgres.
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { join } from 'path'
+
+const DB_FILE = '/tmp/hertz-db.json'
+
+function saveToDisk() {
+  try {
+    const data = {
+      staffUsers: [...staffUsers.entries()].map(([k, v]) => [k, serialize(v)]),
+      contracts: [...contracts.entries()].map(([k, v]) => [k, serialize(v)]),
+      checkinVideos: [...checkinVideos.entries()].map(([k, v]) => [k, serialize(v)]),
+      damageReports: [...damageReports.entries()].map(([k, v]) => [k, serialize(v)]),
+      damageComparisons: [...damageComparisons.entries()].map(([k, v]) => [k, serialize(v)]),
+    }
+    writeFileSync(DB_FILE, JSON.stringify(data), 'utf-8')
+  } catch (e) {
+    // Silently fail on read-only filesystems
+  }
+}
+
+function serialize(item: any): any {
+  const result: any = {}
+  for (const [key, value] of Object.entries(item)) {
+    if (value instanceof Date) {
+      result[key] = { __type: 'Date', value: value.toISOString() }
+    } else if (Array.isArray(value)) {
+      result[key] = value.map(serialize)
+    } else if (value && typeof value === 'object' && !(value instanceof Date)) {
+      // Don't serialize relation fields (they're computed at query time)
+      if (['inspections', 'comparisons', 'contract', 'recordedBy', 'damageReport',
+           'checkinVideo', 'pickupReport', 'returnReport', 'reviewedBy', '_count'].includes(key)) {
+        continue
+      }
+      result[key] = value
+    } else {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+function deserialize(item: any): any {
+  const result: any = {}
+  for (const [key, value] of Object.entries(item)) {
+    if (value && typeof value === 'object' && '__type' in value) {
+      if (value.__type === 'Date') {
+        result[key] = new Date(value.value)
+      }
+    } else {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+function loadFromDisk(): boolean {
+  try {
+    if (!existsSync(DB_FILE)) return false
+    const raw = readFileSync(DB_FILE, 'utf-8')
+    const data = JSON.parse(raw)
+    if (data.staffUsers) data.staffUsers.forEach(([k, v]: [string, any]) => staffUsers.set(k, deserialize(v)))
+    if (data.contracts) data.contracts.forEach(([k, v]: [string, any]) => contracts.set(k, deserialize(v)))
+    if (data.checkinVideos) data.checkinVideos.forEach(([k, v]: [string, any]) => checkinVideos.set(k, deserialize(v)))
+    if (data.damageReports) data.damageReports.forEach(([k, v]: [string, any]) => damageReports.set(k, deserialize(v)))
+    if (data.damageComparisons) data.damageComparisons.forEach(([k, v]: [string, any]) => damageComparisons.set(k, deserialize(v)))
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
 // ─── Query Helpers ──────────────────────────────────────────────────────────
 
 function applyIncludes<T extends Record<string, any>>(
@@ -29,7 +106,7 @@ function applyIncludes<T extends Record<string, any>>(
   context: 'staffUser' | 'contract' | 'checkinVideo' | 'damageReport' | 'damageComparison'
 ): T {
   if (!include) return item
-  const result: any = { ...item }
+  const result = { ...item }
 
   if (context === 'staffUser') {
     const user = result as unknown as StaffUser
@@ -106,14 +183,6 @@ function applyIncludes<T extends Record<string, any>>(
         if (include.contract.comparisons) {
           contractResult.comparisons = [...damageComparisons.values()]
             .filter(cmp => cmp.contractId === c.id)
-            .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-            .slice(0, include.contract.comparisons.take || 999)
-            .map(cmp => {
-              const r = { ...cmp }
-              if (include.contract.comparisons.pickupReport) r.pickupReport = damageReports.get(cmp.pickupReportId)
-              if (include.contract.comparisons.returnReport) r.returnReport = damageReports.get(cmp.returnReportId)
-              return r
-            })
         }
         result.contract = contractResult as any
       } else {
@@ -178,7 +247,6 @@ function matchesWhere(item: Record<string, any>, where: Record<string, any> | un
     }
 
     if (typeof value === 'object' && !Array.isArray(value)) {
-      // Field-level operators like { contains: 'x' }, { gte: date }, { in: [...] }, { some: {...} }
       if ('contains' in value) {
         const str = (itemValue as string) || ''
         const mode = (value as any).mode
@@ -187,6 +255,11 @@ function matchesWhere(item: Record<string, any>, where: Record<string, any> | un
         } else {
           if (!str.includes((value as any).contains)) return false
         }
+        continue
+      }
+      if ('startsWith' in value) {
+        const str = (itemValue instanceof Date ? itemValue.toISOString() : String(itemValue || ''))
+        if (!str.startsWith((value as any).startsWith)) return false
         continue
       }
       if ('gte' in value) {
@@ -210,18 +283,15 @@ function matchesWhere(item: Record<string, any>, where: Record<string, any> | un
         continue
       }
       if ('some' in value) {
-        // Relation filter: e.g. inspections: { some: { status: 'pending_upload' } }
         const relationName = key
         const relatedItems = [...checkinVideos.values()].filter(v => v.contractId === item.id)
         if (!relatedItems.some(ri => matchesWhere(ri as any, (value as any).some))) return false
         continue
       }
-      // Unknown operator, do exact match on the sub-object
       if (JSON.stringify(itemValue) !== JSON.stringify(value)) return false
       continue
     }
 
-    // Exact match
     if (itemValue !== value) return false
   }
   return true
@@ -231,7 +301,6 @@ function applyOrderBy<T>(items: T[], orderBy: Record<string, any> | undefined): 
   if (!orderBy) return items
   const sorted = [...items]
   const keys = Object.keys(orderBy)
-  // Support single or multi-key orderBy
   for (const key of keys.reverse()) {
     const direction = orderBy[key] === 'desc' ? -1 : 1
     sorted.sort((a, b) => {
@@ -319,20 +388,27 @@ function seed() {
   })
 }
 
-// Auto-seed on first import
-seed()
+// Try to load persisted data first; if not found, seed fresh
+const loaded = loadFromDisk()
+if (!loaded) {
+  seed()
+}
 
-// ─── Database Client (drop-in replacement for Prisma) ────────────────────────
+// ─── Database Client ──────────────────────────────────────────────────────
 
-// Remove query logging in production
 const isDev = process.env.NODE_ENV !== 'production'
 
 function logQuery(msg: string) {
   if (isDev) console.log(`[MockDB] ${msg}`)
 }
 
+// Helper: persist after every write
+function persist() {
+  saveToDisk()
+}
+
 export const db = {
-  // ─── StaffUser Model ─────────────────────────────────────────────────────
+  // ─── StaffUser Model ─────────────────────────────────────────────────
   staffUser: {
     findUnique({ where, include }: { where: Record<string, any>; include?: Record<string, any> }) {
       logQuery(`staffUser.findUnique where=${JSON.stringify(where)}`)
@@ -365,6 +441,7 @@ export const db = {
       if (!user) throw new Error('StaffUser not found')
       const updated = { ...user, ...data, updatedAt: new Date() }
       staffUsers.set(updated.id, updated)
+      persist()
       return updated
     },
 
@@ -384,30 +461,23 @@ export const db = {
         updatedAt: now,
       }
       staffUsers.set(user.id, user)
+      persist()
       return user
     },
   },
 
-  // ─── Contract Model ────────────────────────────────────────────────────────
+  // ─── Contract Model ────────────────────────────────────────────────────
   contract: {
     findUnique({ where, include }: { where: Record<string, any>; include?: Record<string, any> }) {
       logQuery(`contract.findUnique where=${JSON.stringify(where)}`)
-      const contract = where.id ? contracts.get(where.id) : undefined
+      let contract: Contract | undefined
+      if (where.id) {
+        contract = contracts.get(where.id)
+      } else if (where.reservationNumber) {
+        contract = [...contracts.values()].find(c => c.reservationNumber === where.reservationNumber)
+      }
       if (!contract) return null
       return applyIncludes({ ...contract }, include, 'contract')
-    },
-
-    findFirst({ where, include, orderBy }: {
-      where?: Record<string, any>; include?: Record<string, any>;
-      orderBy?: Record<string, any>
-    } = {}) {
-      logQuery(`contract.findFirst`)
-      let results = [...contracts.values()]
-      if (where) results = results.filter(c => matchesWhere(c, where))
-      results = applyOrderBy(results, orderBy)
-      const first = results[0]
-      if (!first) return null
-      return applyIncludes({ ...first }, include, 'contract')
     },
 
     findMany({ where, include, orderBy, take }: {
@@ -420,6 +490,19 @@ export const db = {
       results = applyOrderBy(results, orderBy)
       if (take) results = results.slice(0, take)
       return results.map(c => applyIncludes({ ...c }, include, 'contract'))
+    },
+
+    findFirst({ where, include, orderBy }: {
+      where?: Record<string, any>; include?: Record<string, any>;
+      orderBy?: Record<string, any>
+    } = {}) {
+      logQuery(`contract.findFirst`)
+      let results = [...contracts.values()]
+      if (where) results = results.filter(c => matchesWhere(c, where))
+      results = applyOrderBy(results, orderBy)
+      const c = results[0]
+      if (!c) return null
+      return applyIncludes({ ...c }, include, 'contract')
     },
 
     count({ where }: { where?: Record<string, any> } = {}) {
@@ -447,35 +530,54 @@ export const db = {
         updatedAt: now,
       }
       contracts.set(contract.id, contract)
+      persist()
       return contract
     },
 
     update({ where, data }: { where: Record<string, any>; data: Record<string, any> }) {
       logQuery(`contract.update where=${JSON.stringify(where)}`)
-      const contract = contracts.get(where.id)
+      let contract: Contract | undefined
+      if (where.id) {
+        contract = contracts.get(where.id)
+      } else if (where.reservationNumber) {
+        contract = [...contracts.values()].find(c => c.reservationNumber === where.reservationNumber)
+      }
       if (!contract) throw new Error('Contract not found')
       const updated = { ...contract, ...data, updatedAt: new Date() }
       contracts.set(updated.id, updated)
+      persist()
       return updated
     },
 
     delete({ where }: { where: Record<string, any> }) {
       logQuery(`contract.delete where=${JSON.stringify(where)}`)
       const id = where.id
-      if (!id) return null
-      const deleted = contracts.get(id as string)
-      contracts.delete(id as string)
-      return deleted || null
+      if (id && contracts.has(id)) {
+        // Also delete related records
+        const vids = [...checkinVideos.values()].filter(v => v.contractId === id)
+        vids.forEach(v => {
+          checkinVideos.delete(v.id)
+          const dr = [...damageReports.values()].find(r => r.checkinVideoId === v.id)
+          if (dr) damageReports.delete(dr.id)
+        })
+        const comps = [...damageComparisons.values()].filter(c => c.contractId === id)
+        comps.forEach(c => damageComparisons.delete(c.id))
+        contracts.delete(id)
+        persist()
+        return { id }
+      }
+      throw new Error('Contract not found')
     },
 
     deleteMany() {
       logQuery(`contract.deleteMany`)
       contracts.clear()
+      persist()
       return { count: 0 }
     },
   },
 
-  // ─── CheckinVideo Model ───────────────────────────────────────────────────
+  // ─── CheckinVideo Model ─────────────────────────────────────────────────
   checkinVideo: {
     findUnique({ where, include }: { where: Record<string, any>; include?: Record<string, any> }) {
       logQuery(`checkinVideo.findUnique where=${JSON.stringify(where)}`)
@@ -535,6 +637,7 @@ export const db = {
         updatedAt: now,
       }
       checkinVideos.set(video.id, video)
+      persist()
       return video
     },
 
@@ -544,17 +647,19 @@ export const db = {
       if (!video) throw new Error('CheckinVideo not found')
       const updated = { ...video, ...data, updatedAt: new Date() }
       checkinVideos.set(updated.id, updated)
+      persist()
       return updated
     },
 
     deleteMany() {
       logQuery(`checkinVideo.deleteMany`)
       checkinVideos.clear()
+      persist()
       return { count: 0 }
     },
   },
 
-  // ─── DamageReport Model ───────────────────────────────────────────────────
+  // ─── DamageReport Model ───────────────────────────────────────────────
   damageReport: {
     findUnique({ where, include }: { where: Record<string, any>; include?: Record<string, any> }) {
       logQuery(`damageReport.findUnique where=${JSON.stringify(where)}`)
@@ -603,6 +708,7 @@ export const db = {
         createdAt: now,
       }
       damageReports.set(report.id, report)
+      persist()
       return report
     },
 
@@ -612,6 +718,7 @@ export const db = {
       if (!report) throw new Error('DamageReport not found')
       const updated = { ...report, ...data, updatedAt: new Date() }
       damageReports.set(updated.id, updated)
+      persist()
       return updated
     },
 
@@ -623,6 +730,7 @@ export const db = {
       if (existing) {
         const updated = { ...existing, ...updateData }
         damageReports.set(updated.id, updated)
+        persist()
         return updated
       }
       return db.damageReport.create({ data: create })
@@ -631,11 +739,12 @@ export const db = {
     deleteMany() {
       logQuery(`damageReport.deleteMany`)
       damageReports.clear()
+      persist()
       return { count: 0 }
     },
   },
 
-  // ─── DamageComparison Model ────────────────────────────────────────────────
+  // ─── DamageComparison Model ────────────────────────────────────────────
   damageComparison: {
     findUnique({ where, include }: { where: Record<string, any>; include?: Record<string, any> }) {
       logQuery(`damageComparison.findUnique where=${JSON.stringify(where)}`)
@@ -697,6 +806,7 @@ export const db = {
         updatedAt: now,
       }
       damageComparisons.set(cmp.id, cmp)
+      persist()
       return cmp
     },
 
@@ -706,17 +816,19 @@ export const db = {
       if (!cmp) throw new Error('DamageComparison not found')
       const updated = { ...cmp, ...data, updatedAt: new Date() }
       damageComparisons.set(updated.id, updated)
+      persist()
       return updated
     },
 
     deleteMany() {
       logQuery(`damageComparison.deleteMany`)
       damageComparisons.clear()
+      persist()
       return { count: 0 }
     },
   },
 
-  // ─── User Model (legacy, unused but kept for compatibility) ──────────────────
+  // ─── User Model (legacy, unused but kept for compatibility) ────────────
   user: {
     findUnique() { return null },
     findMany() { return [] },
