@@ -71,11 +71,11 @@ function serialize(item: any): any {
 function deserialize(item: any): any {
   const result: any = {}
   for (const [key, value] of Object.entries(item)) {
-    if (value && typeof value === 'object' && '__type' in value) {
+        if (value && typeof value === 'object' && '__type' in value) {
       if (value.__type === 'Date') {
         result[key] = new Date(value.value)
       }
-    } else {
+    }
       result[key] = value
     }
   }
