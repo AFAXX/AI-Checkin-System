@@ -19,6 +19,7 @@ import {
   PenLine, RotateCcw, ArrowRight, FileText, Users, BarChart3,
   Clock, MapPin, Signpost, Wrench, Upload, Sparkles, X,
   ArrowDownLeft, ArrowUpRight, UploadCloud, FileSpreadsheet, Archive,
+  Trash2, Plus, Calendar,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
@@ -43,6 +44,7 @@ interface Contract {
   pickupDate: string
   returnDate: string | null
   status: string
+  locationCode: string | null
   inspections: Inspection[]
   comparisons: Comparison[]
 }
@@ -247,6 +249,7 @@ export default function HomePage() {
     return (
       <ReportView
         contract={selectedContract}
+        kind={activeTab}
         userRole={user.role}
         onBack={() => setView('dashboard')}
         onComplete={() => setView('success')}
@@ -458,6 +461,59 @@ function DashboardView({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null)
   const [uploadingExcel, setUploadingExcel] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [newContract, setNewContract] = useState({
+    reservationNumber: '',
+    customerName: '',
+    vehicleReg: '',
+    vehicleModel: '',
+    locationCode: 'MLA',
+    pickupDate: new Date().toISOString().split('T')[0],
+    returnDate: '',
+    type: 'checkout' as string,
+  })
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this contract? This action cannot be undone.')) return
+    try {
+      await fetch('/api/contracts', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      })
+      await refreshContracts()
+    } catch (err) {
+      console.error('Delete failed:', err)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!newContract.customerName.trim()) return
+    try {
+      await fetch('/api/contracts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reservationNumber: newContract.reservationNumber || `MANUAL-${Date.now()}`,
+          customerName: newContract.customerName,
+          vehicleReg: newContract.vehicleReg,
+          vehicleModel: newContract.vehicleModel,
+          locationCode: newContract.locationCode,
+          pickupDate: newContract.pickupDate,
+          returnDate: newContract.returnDate || null,
+          status: newContract.type === 'checkout' ? 'checkout_pending' : 'checkin_pending',
+        }),
+      })
+      setShowCreateDialog(false)
+      setNewContract({
+        reservationNumber: '', customerName: '', vehicleReg: '', vehicleModel: '',
+        locationCode: 'MLA', pickupDate: new Date().toISOString().split('T')[0], returnDate: '', type: 'checkout',
+      })
+      await refreshContracts()
+    } catch (err) {
+      console.error('Create failed:', err)
+    }
+  }
 
   // Filter by STATUS (set during Excel import):
   //   checkout_pending = uploaded from Check-outs file → Check-Outs tab
@@ -467,12 +523,15 @@ function DashboardView({
   const checkinContracts = contracts.filter(c => c.status === 'checkin_pending')
   const archiveContracts = contracts.filter(c => c.status === 'completed')
 
-  const filtered = (tab === 'checkouts' ? checkoutContracts : tab === 'checkins' ? checkinContracts : archiveContracts).filter(c =>
-    c.reservationNumber.toLowerCase().includes(search.toLowerCase()) ||
-    c.customerName.toLowerCase().includes(search.toLowerCase()) ||
-    c.vehicleReg.toLowerCase().includes(search.toLowerCase()) ||
-    c.vehicleModel.toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = (tab === 'checkouts' ? checkoutContracts : tab === 'checkins' ? checkinContracts : archiveContracts).filter(c => {
+    if (!search) return true
+    const q = search.toLowerCase()
+    return (c.reservationNumber || '').toLowerCase().includes(q) ||
+      (c.customerName || '').toLowerCase().includes(q) ||
+      (c.vehicleReg || '').toLowerCase().includes(q) ||
+      (c.vehicleModel || '').toLowerCase().includes(q) ||
+      (c.locationCode || '').toLowerCase().includes(q)
+  })
 
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -618,6 +677,15 @@ function DashboardView({
             {uploadingExcel ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600" />}
             Upload Excel
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowCreateDialog(true)}
+            className="border-blue-200 text-blue-700 hover:bg-blue-50"
+          >
+            <Plus className="w-4 h-4 mr-2 text-blue-600" />
+            New Contract
+          </Button>
         </div>
 
         {/* Upload status message */}
@@ -735,6 +803,13 @@ function DashboardView({
                                 <ArrowDownLeft className="w-3 h-3 mr-1" /> Start Check-In
                               </Button>
                             )}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDelete(contract.id) }}
+                              className="text-slate-400 hover:text-red-500 transition-colors p-1.5 rounded hover:bg-red-50"
+                              title="Delete contract"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
                       </CardContent>
@@ -745,6 +820,126 @@ function DashboardView({
             )}
           </CardContent>
         </Card>
+
+        {/* Create New Contract Dialog */}
+        <AnimatePresence>
+          {showCreateDialog && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+              onClick={() => setShowCreateDialog(false)}
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-white rounded-xl shadow-2xl w-full max-w-md"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Card className="border-0 shadow-none">
+                  <CardHeader className="border-b border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg">Create New Contract</CardTitle>
+                      <button onClick={() => setShowCreateDialog(false)} className="text-slate-400 hover:text-slate-600">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-4 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5 col-span-2">
+                        <Label className="text-xs text-slate-600">Customer Name *</Label>
+                        <Input
+                          value={newContract.customerName}
+                          onChange={(e) => setNewContract({ ...newContract, customerName: e.target.value })}
+                          placeholder="e.g. Mario Rossi"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-600">Reservation #</Label>
+                        <Input
+                          value={newContract.reservationNumber}
+                          onChange={(e) => setNewContract({ ...newContract, reservationNumber: e.target.value })}
+                          placeholder="Auto-generated"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-600">Station</Label>
+                        <Input
+                          value={newContract.locationCode}
+                          onChange={(e) => setNewContract({ ...newContract, locationCode: e.target.value })}
+                          placeholder="MLA"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-600">Vehicle Reg</Label>
+                        <Input
+                          value={newContract.vehicleReg}
+                          onChange={(e) => setNewContract({ ...newContract, vehicleReg: e.target.value })}
+                          placeholder="e.g. ABC 123"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-600">Vehicle Model</Label>
+                        <Input
+                          value={newContract.vehicleModel}
+                          onChange={(e) => setNewContract({ ...newContract, vehicleModel: e.target.value })}
+                          placeholder="e.g. Toyota Yaris"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-600">Pickup Date</Label>
+                        <Input
+                          type="date"
+                          value={newContract.pickupDate}
+                          onChange={(e) => setNewContract({ ...newContract, pickupDate: e.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-slate-600">Return Date</Label>
+                        <Input
+                          type="date"
+                          value={newContract.returnDate}
+                          onChange={(e) => setNewContract({ ...newContract, returnDate: e.target.value })}
+                          min={newContract.pickupDate}
+                        />
+                      </div>
+                      <div className="space-y-1.5 col-span-2">
+                        <Label className="text-xs text-slate-600">Type</Label>
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => setNewContract({ ...newContract, type: 'checkout' })}
+                            className={`flex-1 p-2.5 rounded-lg border text-sm font-medium transition-colors ${newContract.type === 'checkout' ? 'border-purple-300 bg-purple-50 text-purple-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                          >
+                            <ArrowUpRight className="w-4 h-4 inline mr-1" /> Check-Out
+                          </button>
+                          <button
+                            onClick={() => setNewContract({ ...newContract, type: 'checkin' })}
+                            className={`flex-1 p-2.5 rounded-lg border text-sm font-medium transition-colors ${newContract.type === 'checkin' ? 'border-blue-300 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`}
+                          >
+                            <ArrowDownLeft className="w-4 h-4 inline mr-1" /> Check-In
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-3 pt-2">
+                      <Button variant="outline" onClick={() => setShowCreateDialog(false)} className="flex-1">Cancel</Button>
+                      <Button
+                        onClick={handleCreate}
+                        disabled={!newContract.customerName.trim()}
+                        className="flex-1 bg-amber-500 hover:bg-amber-600 text-white"
+                      >
+                        Create
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   )
@@ -1080,9 +1275,9 @@ function InspectionView({
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ReportView({
-  contract, userRole, onBack, onComplete,
+  contract, kind, userRole, onBack, onComplete,
 }: {
-  contract: Contract; userRole: string; onBack: () => void; onComplete: () => void
+  contract: Contract; kind: 'pickup' | 'return'; userRole: string; onBack: () => void; onComplete: () => void
 }) {
   const [signerName, setSignerName] = useState(contract.customerName || '')
   const [hasStrokes, setHasStrokes] = useState(false)
@@ -1161,14 +1356,45 @@ function ReportView({
     setHasStrokes(false)
   }, [])
 
+  const [returnDate, setReturnDate] = useState(
+    kind === 'pickup' && contract.returnDate
+      ? new Date(contract.returnDate).toISOString().split('T')[0]
+      : ''
+  )
+
   const handleSubmit = async () => {
     setSubmitting(true)
-    await new Promise(r => setTimeout(r, 1500))
+    try {
+      if (kind === 'pickup') {
+        // Checkout signed: move to Check-Ins with the return date
+        await fetch('/api/contracts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: contract.id,
+            status: 'checkin_pending',
+            returnDate: returnDate ? new Date(returnDate).toISOString() : null,
+          }),
+        })
+      } else {
+        // Checkin signed: move to Archive
+        await fetch('/api/contracts', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: contract.id,
+            status: 'completed',
+          }),
+        })
+      }
+    } catch (err) {
+      console.error('Error updating contract:', err)
+    }
     setSubmitting(false)
     onComplete()
   }
 
-  const canSubmit = signerName.trim().length > 0 && hasStrokes
+  const canSubmit = signerName.trim().length > 0 && hasStrokes && (kind !== 'pickup' || !!returnDate)
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
@@ -1313,6 +1539,36 @@ function ReportView({
           </motion.div>
         )}
 
+        {/* Return Date Picker (only for checkout / pickup) */}
+        {kind === 'pickup' && (
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+            <Card className="bg-white border-slate-200">
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Calendar className="w-5 h-5" />
+                  Return Date
+                </CardTitle>
+                <CardDescription>Set the expected return date for this rental</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Input
+                  type="date"
+                  value={returnDate}
+                  onChange={(e) => setReturnDate(e.target.value)}
+                  className="max-w-xs"
+                  min={new Date().toISOString().split('T')[0]}
+                  required
+                />
+                {returnDate && (
+                  <p className="text-xs text-slate-500 mt-2">
+                    Return scheduled for {new Date(returnDate + 'T00:00:00').toLocaleDateString('en-MT', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+
         {/* Signature Section */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
           <Card className="bg-white border-slate-200">
@@ -1375,7 +1631,11 @@ function ReportView({
                   )}
                 </Button>
                 {!canSubmit && (
-                  <p className="text-xs text-slate-400 mt-2">Both customer name and signature are required to complete.</p>
+                  <p className="text-xs text-slate-400 mt-2">
+                    {kind === 'pickup' && !returnDate
+                      ? 'Return date, customer name and signature are required.'
+                      : 'Both customer name and signature are required to complete.'}
+                  </p>
                 )}
               </div>
             </CardContent>
