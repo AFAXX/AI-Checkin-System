@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getCurrentTenantId } from '@/lib/tenant';
 
 interface ImportItem {
   rentalNumber: string;
@@ -24,6 +25,8 @@ export async function POST(request: NextRequest) {
     if (!type || !items || !Array.isArray(items)) {
       return NextResponse.json({ error: 'Missing type or items' }, { status: 400 });
     }
+
+    const tenantId = await getCurrentTenantId();
 
     if (!['checkout', 'checkin'].includes(type)) {
       return NextResponse.json({ error: 'type must be checkout or checkin' }, { status: 400 });
@@ -65,6 +68,7 @@ export async function POST(request: NextRequest) {
             // Create new contract from check-out
             await db.contract.create({
               data: {
+                tenantId,
                 reservationNumber: item.rentalNumber,
                 customerName: item.customerName,
                 customerEmail: `${item.rentalNumber.toLowerCase()}@import.hertzmalta.com`,
@@ -110,6 +114,7 @@ export async function POST(request: NextRequest) {
             // Create new contract from check-in (return without prior checkout in system)
             await db.contract.create({
               data: {
+                tenantId,
                 reservationNumber: item.rentalNumber,
                 customerName: item.customerName,
                 customerEmail: `${item.rentalNumber.toLowerCase()}@import.hertzmalta.com`,

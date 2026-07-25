@@ -8,7 +8,7 @@ const ROLE_LEVELS: Record<UserRole, number> = {
   admin: 3,
 }
 
-// Demo session - no next-auth dependency
+// Typed session with user role
 type SessionUser = {
   id: string
   email: string
@@ -21,36 +21,54 @@ export type AuthSession = {
   expires: string
 }
 
-const DEMO_SESSION: AuthSession = {
-  user: {
-    id: "demo-admin-001",
-    email: "admin@hertzmalta.com",
-    name: "Hertz Admin",
-    role: "admin",
-  },
-  expires: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
-}
-
+/**
+ * Get the current server-side session with typed user role.
+ * In demo mode, returns null (auth is client-side via localStorage).
+ */
 export async function getServerSession(): Promise<AuthSession | null> {
-  return DEMO_SESSION
+  // Demo mode: no server-side auth
+  return null
 }
 
+/**
+ * Require authentication. Throws a 401 error if no session.
+ * In demo mode, always returns a default session.
+ */
 export async function requireAuth(): Promise<AuthSession> {
-  return DEMO_SESSION
+  // Demo mode: allow all access
+  return {
+    user: {
+      id: 'demo',
+      email: 'demo@hertzmalta.com',
+      name: 'Demo User',
+      role: 'admin',
+    },
+    expires: new Date(Date.now() + 86400000).toISOString(),
+  }
 }
 
+/**
+ * Require a minimum role level.
+ * In demo mode, always passes.
+ */
 export async function requireRole(
   minRole: "staff" | "manager" | "admin"
 ): Promise<AuthSession> {
-  return DEMO_SESSION
+  return requireAuth()
 }
 
+/**
+ * Check if a session has the given role or higher.
+ */
 export async function hasRole(
   minRole: "staff" | "manager" | "admin"
 ): Promise<boolean> {
   return true
 }
 
+/**
+ * Create a JSON error response for auth failures.
+ */
 export function authErrorResponse(error: AuthError) {
   return NextResponse.json(
     { error: error.message },
@@ -58,6 +76,7 @@ export function authErrorResponse(error: AuthError) {
   )
 }
 
+// Custom error class for authentication/authorization
 export class AuthError extends Error {
   statusCode: number
 

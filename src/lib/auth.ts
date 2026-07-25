@@ -1,6 +1,5 @@
-// Stubbed auth module - next-auth fully removed for Vercel deployment
-// Auth is handled client-side in demo mode
-export const handlers = {}
-export const auth = async () => null
+// auth.ts — Stub: next-auth removed. Auth is handled client-side via localStorage demo.
+export const handlers = { GET: async () => new Response(null), POST: async () => new Response(null) }
+export const auth = () => null
 export const signIn = async () => null
 export const signOut = async () => null

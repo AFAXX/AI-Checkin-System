@@ -66,9 +66,8 @@ export async function POST(
 
     // Check if comparison is possible
     const otherKind = video.kind === 'pickup' ? 'return' : 'pickup';
-    const contractInspections = video.contract.inspections || [];
-    const otherVideo = contractInspections.find((v: any) => v.kind === otherKind);
-    let comparison: any = null;
+    const otherVideo = video.contract.inspections.find((v) => v.kind === otherKind);
+    let comparison = null;
 
     if (otherVideo?.damageReport) {
       const pickupReport = video.kind === 'pickup' ? report : otherVideo.damageReport;

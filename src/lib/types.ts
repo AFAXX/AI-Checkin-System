@@ -12,9 +12,28 @@ export type InspectionStatus =
   | 'awaiting_signature'
   | 'completed'
 export type DamageSeverity = 'low' | 'medium' | 'high'
+export type TenantStatus = 'active' | 'suspended' | 'trial'
+
+// ─── Multi-Tenant ───────────────────────────────────────────────────────────
+
+export interface Tenant {
+  id: string
+  slug: string            // "hertz-malta", "avis-italia"
+  name: string            // "Hertz Malta"
+  status: TenantStatus
+  config: {
+    roboflow?: { enabled: boolean; apiKey?: string; modelId?: string }
+    branding?: { primaryColor: string; logoUrl?: string }
+  } | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+// ─── Models (with tenantId) ─────────────────────────────────────────────────
 
 export interface StaffUser {
   id: string
+  tenantId: string
   entraOid: string
   email: string
   displayName: string
@@ -28,10 +47,12 @@ export interface StaffUser {
   inspections?: CheckinVideo[]
   reviews?: DamageComparison[]
   _count?: { inspections: number }
+  tenant?: Tenant
 }
 
 export interface Contract {
   id: string
+  tenantId: string
   reservationNumber: string
   customerName: string
   customerEmail: string
@@ -46,10 +67,12 @@ export interface Contract {
   // Relations
   inspections?: CheckinVideo[]
   comparisons?: DamageComparison[]
+  tenant?: Tenant
 }
 
 export interface CheckinVideo {
   id: string
+  tenantId: string
   contractId: string
   kind: VideoKind
   storageUrl: string | null
@@ -70,6 +93,7 @@ export interface CheckinVideo {
 
 export interface DamageReport {
   id: string
+  tenantId: string
   checkinVideoId: string
   modelVersion: string
   rawJsonUrl: string | null
@@ -83,6 +107,7 @@ export interface DamageReport {
 
 export interface DamageComparison {
   id: string
+  tenantId: string
   contractId: string
   pickupReportId: string
   returnReportId: string

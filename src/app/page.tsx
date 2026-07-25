@@ -658,6 +658,10 @@ function DashboardView({
               <p className="text-slate-500 text-xs">AI Inspection Platform</p>
             </div>
           </div>
+          <div className="flex items-center gap-1.5 text-slate-400">
+            <span className="text-[10px] leading-none">powered by</span>
+            <img src="/lince-logo.png" alt="Lince" className="h-5 w-auto rounded" />
+          </div>
           <div className="flex items-center gap-2">
             <Button onClick={onCreateClick} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3">
               <Plus className="w-4 h-4 mr-1" />

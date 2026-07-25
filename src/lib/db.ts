@@ -5,7 +5,7 @@
 
 import type {
   StaffUser, Contract, CheckinVideo, DamageReport, DamageComparison,
-  UserRole, VideoKind, VideoStatus,
+  UserRole, VideoKind, VideoStatus, Tenant,
 } from './types'
 
 // ─── UUID Generator ──────────────────────────────────────────────────────────
@@ -16,6 +16,7 @@ function cuid(): string {
 
 // ─── In-Memory Store ─────────────────────────────────────────────────────────
 
+const tenants: Map<string, Tenant> = new Map()
 const staffUsers: Map<string, StaffUser> = new Map()
 const contracts: Map<string, Contract> = new Map()
 const checkinVideos: Map<string, CheckinVideo> = new Map()
@@ -35,6 +36,7 @@ const DB_FILE = '/tmp/hertz-db.json'
 function saveToDisk() {
   try {
     const data = {
+      tenants: [...tenants.entries()].map(([k, v]) => [k, serialize(v)]),
       staffUsers: [...staffUsers.entries()].map(([k, v]) => [k, serialize(v)]),
       contracts: [...contracts.entries()].map(([k, v]) => [k, serialize(v)]),
       checkinVideos: [...checkinVideos.entries()].map(([k, v]) => [k, serialize(v)]),
@@ -57,7 +59,7 @@ function serialize(item: any): any {
     } else if (value && typeof value === 'object' && !(value instanceof Date)) {
       // Don't serialize relation fields (they're computed at query time)
       if (['inspections', 'comparisons', 'contract', 'recordedBy', 'damageReport',
-           'checkinVideo', 'pickupReport', 'returnReport', 'reviewedBy', '_count'].includes(key)) {
+           'checkinVideo', 'pickupReport', 'returnReport', 'reviewedBy', '_count', 'tenant'].includes(key)) {
         continue
       }
       result[key] = value
@@ -88,6 +90,7 @@ function loadFromDisk(): boolean {
     if (!existsSync(DB_FILE)) return false
     const raw = readFileSync(DB_FILE, 'utf-8')
     const data = JSON.parse(raw)
+    if (data.tenants) data.tenants.forEach(([k, v]: [string, any]) => tenants.set(k, deserialize(v)))
     if (data.staffUsers) data.staffUsers.forEach(([k, v]: [string, any]) => staffUsers.set(k, deserialize(v)))
     if (data.contracts) data.contracts.forEach(([k, v]: [string, any]) => contracts.set(k, deserialize(v)))
     if (data.checkinVideos) data.checkinVideos.forEach(([k, v]: [string, any]) => checkinVideos.set(k, deserialize(v)))
@@ -329,22 +332,40 @@ function seed() {
   const now = new Date()
   const day = (d: number) => new Date(now.getTime() + d * 24 * 60 * 60 * 1000)
 
-  // Staff Users
+  // ─── Default Tenant: Hertz Malta ─────────────────────────────────────
+  const hertzMalta: Tenant = {
+    id: cuid(),
+    slug: 'hertz-malta',
+    name: 'Hertz Malta',
+    status: 'active',
+    config: {
+      roboflow: { enabled: false },
+      branding: { primaryColor: '#f59e0b' },
+    },
+    createdAt: day(-90),
+    updatedAt: now,
+  }
+  tenants.set(hertzMalta.id, hertzMalta)
+
+  // Staff Users (all under Hertz Malta tenant)
   const users: StaffUser[] = [
     {
       id: cuid(), entraOid: 'demo-staff-oid-001',
+      tenantId: hertzMalta.id,
       email: 'staff@hertzmalta.com', displayName: 'Maria Borg',
       role: 'staff', locationCode: 'MLA', isActive: true,
       lastLoginAt: null, createdAt: day(-30), updatedAt: now,
     },
     {
       id: cuid(), entraOid: 'demo-manager-oid-002',
+      tenantId: hertzMalta.id,
       email: 'manager@hertzmalta.com', displayName: 'Mark Vella',
       role: 'manager', locationCode: 'MLA', isActive: true,
       lastLoginAt: null, createdAt: day(-30), updatedAt: now,
     },
     {
       id: cuid(), entraOid: 'demo-admin-oid-003',
+      tenantId: hertzMalta.id,
       email: 'admin@hertzmalta.com', displayName: 'Claire Farrugia',
       role: 'admin', locationCode: 'MLA', isActive: true,
       lastLoginAt: null, createdAt: day(-30), updatedAt: now,
@@ -352,7 +373,7 @@ function seed() {
   ]
   users.forEach(u => staffUsers.set(u.id, u))
 
-  // Contracts
+  // Contracts (all under Hertz Malta tenant)
   const contractData = [
     {
       reservationNumber: 'RES-2024-001', customerName: 'John Smith',
@@ -382,7 +403,7 @@ function seed() {
   ]
   contractData.forEach(cd => {
     const c: Contract = {
-      id: cuid(), ...cd, status: 'active', locationCode: 'MLA',
+      id: cuid(), tenantId: hertzMalta.id, ...cd, status: 'active', locationCode: 'MLA',
       createdAt: day(-7), updatedAt: now,
     }
     contracts.set(c.id, c)
@@ -409,6 +430,47 @@ function persist() {
 }
 
 export const db = {
+  // ─── Tenant Model ───────────────────────────────────────────────────
+  tenant: {
+    findUnique({ where }: { where: Record<string, any> }) {
+      logQuery(`tenant.findUnique where=${JSON.stringify(where)}`)
+      if (where.id) return tenants.get(where.id) || null
+      if (where.slug) return [...tenants.values()].find(t => t.slug === where.slug) || null
+      return null
+    },
+    findMany({ where }: { where?: Record<string, any> } = {}) {
+      logQuery(`tenant.findMany`)
+      let results = [...tenants.values()]
+      if (where) results = results.filter(t => matchesWhere(t, where))
+      return results
+    },
+    create({ data }: { data: Record<string, any> }) {
+      logQuery(`tenant.create`)
+      const now = new Date()
+      const tenant: Tenant = {
+        id: data.id || cuid(),
+        slug: data.slug,
+        name: data.name,
+        status: data.status || 'active',
+        config: data.config || null,
+        createdAt: data.createdAt || now,
+        updatedAt: now,
+      }
+      tenants.set(tenant.id, tenant)
+      persist()
+      return tenant
+    },
+    update({ where, data }: { where: Record<string, any>; data: Record<string, any> }) {
+      logQuery(`tenant.update where=${JSON.stringify(where)}`)
+      const tenant = tenants.get(where.id)
+      if (!tenant) throw new Error('Tenant not found')
+      const updated = { ...tenant, ...data, updatedAt: new Date() }
+      tenants.set(updated.id, updated)
+      persist()
+      return updated
+    },
+  },
+
   // ─── StaffUser Model ─────────────────────────────────────────────────
   staffUser: {
     findUnique({ where, include }: { where: Record<string, any>; include?: Record<string, any> }) {
@@ -451,6 +513,7 @@ export const db = {
       const now = new Date()
       const user: StaffUser = {
         id: data.id || cuid(),
+        tenantId: data.tenantId || tenants.values().next().value?.id || cuid(),
         entraOid: data.entraOid || cuid(),
         email: data.email,
         displayName: data.displayName,
@@ -518,6 +581,7 @@ export const db = {
       const now = new Date()
       const contract: Contract = {
         id: data.id || cuid(),
+        tenantId: data.tenantId || tenants.values().next().value?.id || cuid(),
         reservationNumber: data.reservationNumber,
         customerName: data.customerName,
         customerEmail: data.customerEmail,
@@ -624,6 +688,7 @@ export const db = {
       const now = new Date()
       const video: CheckinVideo = {
         id: data.id || cuid(),
+        tenantId: data.tenantId || tenants.values().next().value?.id || cuid(),
         contractId: data.contractId,
         kind: data.kind as VideoKind,
         storageUrl: data.storageUrl || null,
@@ -700,6 +765,7 @@ export const db = {
       const now = new Date()
       const report: DamageReport = {
         id: data.id || cuid(),
+        tenantId: data.tenantId || tenants.values().next().value?.id || cuid(),
         checkinVideoId: data.checkinVideoId,
         modelVersion: data.modelVersion,
         rawJsonUrl: data.rawJsonUrl || null,
@@ -791,6 +857,7 @@ export const db = {
       const now = new Date()
       const cmp: DamageComparison = {
         id: data.id || cuid(),
+        tenantId: data.tenantId || tenants.values().next().value?.id || cuid(),
         contractId: data.contractId,
         pickupReportId: data.pickupReportId,
         returnReportId: data.returnReportId,

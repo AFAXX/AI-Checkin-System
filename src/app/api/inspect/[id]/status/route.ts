@@ -37,7 +37,7 @@ export async function GET(
       status: video.status,
       createdAt: video.createdAt,
       damageReport: video.damageReport,
-      comparison: (video.contract.comparisons || [])[0] || null,
+      comparison: video.contract.comparisons[0] || null,
     });
   } catch (error) {
     console.error('Error fetching inspection status:', error);

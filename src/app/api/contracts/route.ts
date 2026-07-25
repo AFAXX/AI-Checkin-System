@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getCurrentTenantId } from '@/lib/tenant';
 
 export async function GET(request: NextRequest) {
   try {
+    const tenantId = await getCurrentTenantId();
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search')?.trim();
     const date = searchParams.get('date');
     const type = searchParams.get('type') || 'all';
 
     // Build where clause
-    const whereConditions: Record<string, any>[] = [];
+    const whereConditions: Record<string, any>[] = [
+      { tenantId },  // MODIFICATO: tenant filter obbligatorio
+    ];
 
     // Text search
     if (search) {
@@ -84,7 +88,10 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json(newContract, { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
+    if (error.message?.includes('Tenant not found')) {
+      return NextResponse.json({ error: 'Tenant not found' }, { status: 404 });
+    }
     console.error('Error creating contract:', error);
     return NextResponse.json({ error: 'Failed to create contract' }, { status: 500 });
   }
