@@ -1,193 +1,143 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 
-// Convert Excel serial number date to JS Date
-function excelDateToDate(serial: number): Date {
-  const utc_days = Math.floor(serial - 25569);
-  const utc_value = utc_days * 86400;
-  return new Date(utc_value * 1000);
-}
-
-// Parse any date value from Excel (serial number, Date object, or string)
-function parseDate(val: any): Date | null {
-  if (!val) return null;
-  if (val instanceof Date) return val;
-  if (typeof val === 'number') return excelDateToDate(val);
-  if (typeof val === 'string' && val) {
-    const d = new Date(val);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  return null;
+interface ImportItem {
+  rentalNumber: string;
+  customerName: string;
+  vehicleModel: string;
+  vehicleReg: string;
+  groupCode: string;
+  fuelType: string;
+  transmission: string;
+  days: number;
+  station: string;
+  confirmation: string;
+  pickupDate: string;
+  returnDate: string | null;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get('file') as File | null;
+    const body = await request.json();
+    const { type, items } = body as { type: 'checkout' | 'checkin'; items: ImportItem[] };
 
-    if (!file) {
-      return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+    if (!type || !items || !Array.isArray(items)) {
+      return NextResponse.json({ error: 'Missing type or items' }, { status: 400 });
     }
 
-    // Auto-detect type from filename
-    let type = (formData.get('type') as string) || '';
-    if (!type) {
-      const fname = file.name.toLowerCase();
-      if (fname.includes('check-in') || fname.includes('checkin')) {
-        type = 'checkin';
-      } else if (fname.includes('check-out') || fname.includes('checkout')) {
-        type = 'checkout';
-      } else {
-        type = 'checkout';
-      }
+    if (!['checkout', 'checkin'].includes(type)) {
+      return NextResponse.json({ error: 'type must be checkout or checkin' }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const XLSX = await import('xlsx');
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet);
+    let created = 0;
+    let updated = 0;
+    let errors: string[] = [];
 
-    if (!rows || rows.length === 0) {
-      return NextResponse.json({ error: 'No data rows found in Excel file' }, { status: 400 });
-    }
-
-    const created: any[] = [];
-    const errors: any[] = [];
-
-    for (const row of rows) {
+    for (const item of items) {
       try {
-        // ── Common fields ──
-        const reservationNumber =
-          row['Confirmation #'] || row['Rental'] || row['Voucher #'] || `RES-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const customerName =
-          row['Customer'] || row['customer'] || row['Customer Name'] || 'Unknown';
-        const customerEmail = '';
-        const vehicleReg =
-          row['Vehicle'] || row['vehicle'] || row['Vehicle Reg'] || row['Plate'] || '';
-        const vehicleModel =
-          row['Model'] || row['model'] || row['Vehicle Model'] || '';
-        const group =
-          row['Group'] || row['C Group'] || row['group'] || '';
-        const station =
-          row['Station'] || row['station'] || 'MLA';
-
-        // ── Date parsing ──
-        const timeVal = row['Time'] || row['time'] || null;
-        const parsedDate = parseDate(timeVal) || new Date();
+        if (!item.rentalNumber || !item.customerName) {
+          errors.push(`Skipped: missing rental number or customer name`);
+          continue;
+        }
 
         if (type === 'checkout') {
-          // ═══ CHECK-OUT (pickup) ═══
-          // Status = 'checkout_pending' → appears in Check-Outs tab
-          const days = row['Days'] || row['days'] || 0;
-          let returnDate: Date | null = null;
-          if (days && typeof days === 'number' && days > 0) {
-            returnDate = new Date(parsedDate);
-            returnDate.setDate(returnDate.getDate() + days);
-          }
-
-          const existing = await db.contract.findFirst({
-            where: { reservationNumber: String(reservationNumber) },
+          // Check-out: create new contract or update existing
+          const existing = await db.contract.findUnique({
+            where: { reservationNumber: item.rentalNumber },
           });
 
           if (existing) {
+            // Update pickup info
             await db.contract.update({
-              where: { id: existing.id },
+              where: { reservationNumber: item.rentalNumber },
               data: {
+                customerName: item.customerName,
+                vehicleModel: item.vehicleModel || item.groupCode || existing.vehicleModel,
+                vehicleReg: item.vehicleReg || existing.vehicleReg,
+                pickupDate: item.pickupDate ? new Date(item.pickupDate) : existing.pickupDate,
+                returnDate: item.returnDate ? new Date(item.returnDate) : existing.returnDate,
+                locationCode: item.station || existing.locationCode,
                 status: 'checkout_pending',
-                vehicleReg: String(vehicleReg) || existing.vehicleReg,
-                vehicleModel: String(vehicleModel) || existing.vehicleModel,
-                pickupDate: parsedDate,
-                returnDate: returnDate || existing.returnDate,
-                customerName: String(customerName) || existing.customerName,
-                updatedAt: new Date(),
               },
             });
-            created.push({ ...existing, updated: true, type: 'checkout' });
+            updated++;
           } else {
-            const contract = await db.contract.create({
+            // Create new contract from check-out
+            await db.contract.create({
               data: {
-                reservationNumber: String(reservationNumber),
-                customerName: String(customerName),
-                customerEmail: String(customerEmail),
-                vehicleReg: String(vehicleReg),
-                vehicleModel: String(vehicleModel),
-                pickupDate: parsedDate,
-                returnDate,
+                reservationNumber: item.rentalNumber,
+                customerName: item.customerName,
+                customerEmail: `${item.rentalNumber.toLowerCase()}@import.hertzmalta.com`,
+                vehicleModel: item.vehicleModel || item.groupCode || 'TBD',
+                vehicleReg: item.vehicleReg || 'TBD',
+                pickupDate: item.pickupDate ? new Date(item.pickupDate) : new Date(),
+                returnDate: item.returnDate ? new Date(item.returnDate) : null,
+                locationCode: item.station || 'MLA',
                 status: 'checkout_pending',
-                locationCode: String(station),
               },
             });
-            created.push({ ...contract, type: 'checkout' });
+            created++;
           }
-
         } else {
-          // ═══ CHECK-IN (drop-off / return) ═══
-          // Status = 'checkin_pending' → appears in Check-Ins tab
-          // Does NOT go to archive — only goes to archive after signature
-          const days = row['Days'] || row['days'] || 0;
-          let returnDate: Date | null = null;
-          if (days && typeof days === 'number' && days > 0) {
-            returnDate = new Date(parsedDate);
-            returnDate.setDate(returnDate.getDate() + days);
-          }
-
-          const existing = await db.contract.findFirst({
-            where: { reservationNumber: String(reservationNumber) },
+          // Check-in: try to match by confirmation or rental number
+          let existing = await db.contract.findUnique({
+            where: { reservationNumber: item.rentalNumber },
           });
 
+          // Try matching by rental number or confirmation via findMany
+          if (!existing && item.confirmation) {
+            const all = await db.contract.findMany({});
+            existing = all.find(c =>
+              c.reservationNumber === item.rentalNumber ||
+              c.customerEmail.includes(item.confirmation) ||
+              c.reservationNumber === item.confirmation
+            ) || null;
+          }
+
           if (existing) {
-            // Contract exists (was uploaded as checkout) → move to checkin queue
+            // Update with return info
             await db.contract.update({
               where: { id: existing.id },
               data: {
+                vehicleReg: item.vehicleReg || existing.vehicleReg,
+                vehicleModel: item.vehicleModel || existing.vehicleModel,
+                returnDate: item.returnDate ? new Date(item.returnDate) : new Date(),
                 status: 'checkin_pending',
-                returnDate: returnDate || parsedDate,
-                vehicleReg: String(vehicleReg) || existing.vehicleReg,
-                vehicleModel: String(vehicleModel) || existing.vehicleModel,
-                customerName: String(customerName) || existing.customerName,
-                updatedAt: new Date(),
               },
             });
-            created.push({ ...existing, updated: true, type: 'checkin' });
+            updated++;
           } else {
-            // No existing checkout → create directly in checkin queue
-            const contract = await db.contract.create({
+            // Create new contract from check-in (return without prior checkout in system)
+            await db.contract.create({
               data: {
-                reservationNumber: String(reservationNumber),
-                customerName: String(customerName),
-                customerEmail: String(customerEmail),
-                vehicleReg: String(vehicleReg),
-                vehicleModel: String(vehicleModel),
-                pickupDate: parsedDate,
-                returnDate: returnDate || parsedDate,
+                reservationNumber: item.rentalNumber,
+                customerName: item.customerName,
+                customerEmail: `${item.rentalNumber.toLowerCase()}@import.hertzmalta.com`,
+                vehicleModel: item.vehicleModel || item.groupCode || 'TBD',
+                vehicleReg: item.vehicleReg || 'TBD',
+                pickupDate: item.pickupDate ? new Date(item.pickupDate) : new Date(),
+                returnDate: item.returnDate ? new Date(item.returnDate) : new Date(),
+                locationCode: item.station || 'MLA',
                 status: 'checkin_pending',
-                locationCode: String(station),
               },
             });
-            created.push({ ...contract, type: 'checkin' });
+            created++;
           }
         }
       } catch (err: any) {
-        errors.push({
-          row: String(JSON.stringify(row).substring(0, 200)),
-          error: err.message,
-        });
+        errors.push(`Error for ${item.rentalNumber}: ${err.message}`);
       }
     }
 
     return NextResponse.json({
       success: true,
-      imported: created.length,
-      total: rows.length,
-      errors: errors.length,
-      errorDetails: errors,
-      contracts: created,
       type,
+      created,
+      updated,
+      errors: errors.length > 0 ? errors.slice(0, 10) : undefined,
     });
   } catch (error) {
-    console.error('Error importing Excel:', error);
-    return NextResponse.json({ error: 'Failed to import Excel file' }, { status: 500 });
+    console.error('Error importing:', error);
+    return NextResponse.json({ error: 'Failed to import' }, { status: 500 });
   }
 }
