@@ -26,7 +26,7 @@ interface Contract {
   pickupDate: string
   returnDate: string | null
   status: string
-  inspections: { id: string; kind: string; status: string; createdAt: string }[]
+  inspections: { id: string; kind: string; status: string; createdAt: string; damageReport: { id: string; modelVersion: string; damages: string; frameCount: number | null; processingMs: number | null } | null }[]
   comparisons: { id: string; newDamages: string; preExistingDamages: string; status: string; signedByName: string | null; signedAt: string | null }[]
 }
 
