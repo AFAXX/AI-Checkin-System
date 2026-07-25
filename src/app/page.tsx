@@ -88,6 +88,7 @@ interface ReturnDateDialogState {
   show: boolean
   contract: Contract | null
   returnDate: string
+  originalReturnDate: string
   saving: boolean
 }
 
@@ -238,7 +239,7 @@ export default function HomePage() {
   const [lastDamages, setLastDamages] = useState<DamageItem[]>([])
   const [showUpload, setShowUpload] = useState(false)
   const [showCreateContract, setShowCreateContract] = useState(false)
-  const [returnDateDialog, setReturnDateDialog] = useState<ReturnDateDialogState>({ show: false, contract: null, returnDate: '', saving: false })
+  const [returnDateDialog, setReturnDateDialog] = useState<ReturnDateDialogState>({ show: false, contract: null, returnDate: '', originalReturnDate: '', saving: false })
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -284,10 +285,12 @@ export default function HomePage() {
   const openInspect = (contract: Contract, kind: 'pickup' | 'return') => {
     if (kind === 'pickup') {
       // Show return date picker dialog before starting pickup inspection
+      const existingReturn = contract.returnDate ? new Date(contract.returnDate).toISOString().split('T')[0] : ''
       setReturnDateDialog({
         show: true,
         contract,
-        returnDate: contract.returnDate ? new Date(contract.returnDate).toISOString().split('T')[0] : '',
+        returnDate: existingReturn || new Date().toISOString().split('T')[0],
+        originalReturnDate: existingReturn,
         saving: false,
       })
     } else {
@@ -298,18 +301,21 @@ export default function HomePage() {
     }
   }
 
-  const handleReturnDateConfirm = async () => {
-    const { contract, returnDate } = returnDateDialog
+  const handleReturnDateConfirm = async (skip: boolean = false) => {
+    const { contract, returnDate, originalReturnDate } = returnDateDialog
     if (!contract) return
     setReturnDateDialog(prev => ({ ...prev, saving: true }))
     try {
-      // Save the return date to the contract
-      const retDate = returnDate ? new Date(returnDate + 'T00:00:00').toISOString() : null
-      await fetch(`/api/contracts/${contract.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ returnDate: retDate }),
-      })
+      // Save return date only if it changed (or always save if not skipping)
+      const dateChanged = returnDate !== originalReturnDate
+      if (!skip || dateChanged) {
+        const retDate = returnDate ? new Date(returnDate + 'T00:00:00').toISOString() : null
+        await fetch(`/api/contracts/${contract.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ returnDate: retDate }),
+        })
+      }
       // Refresh contracts then proceed to inspection
       const data = await fetch('/api/contracts').then(r => r.json()).catch(() => [])
       setContracts(data)
@@ -317,7 +323,7 @@ export default function HomePage() {
       setSelectedContract(updatedContract)
       setActiveKind('pickup')
       setLastDamages([])
-      setReturnDateDialog({ show: false, contract: null, returnDate: '', saving: false })
+      setReturnDateDialog({ show: false, contract: null, returnDate: '', originalReturnDate: '', saving: false })
       setView('inspect')
     } catch {
       setReturnDateDialog(prev => ({ ...prev, saving: false }))
@@ -415,8 +421,10 @@ export default function HomePage() {
               returnDate={returnDateDialog.returnDate}
               setReturnDate={(v) => setReturnDateDialog(prev => ({ ...prev, returnDate: v }))}
               saving={returnDateDialog.saving}
-              onConfirm={handleReturnDateConfirm}
-              onCancel={() => setReturnDateDialog({ show: false, contract: null, returnDate: '', saving: false })}
+              onConfirm={() => handleReturnDateConfirm(false)}
+              onSkip={() => handleReturnDateConfirm(true)}
+              dateChanged={returnDateDialog.returnDate !== returnDateDialog.originalReturnDate}
+              onCancel={() => setReturnDateDialog({ show: false, contract: null, returnDate: '', originalReturnDate: '', saving: false })}
             />
           )}
         </AnimatePresence>
@@ -1568,10 +1576,10 @@ function SuccessView({ contract, onBack }: { contract: Contract; onBack: () => v
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ReturnDatePickerDialog({
-  contract, returnDate, setReturnDate, saving, onConfirm, onCancel,
+  contract, returnDate, setReturnDate, saving, onConfirm, onSkip, dateChanged, onCancel,
 }: {
   contract: Contract; returnDate: string; setReturnDate: (v: string) => void
-  saving: boolean; onConfirm: () => void; onCancel: () => void
+  saving: boolean; onConfirm: () => void; onSkip: () => void; dateChanged: boolean; onCancel: () => void
 }) {
   return (
     <motion.div
@@ -1609,7 +1617,7 @@ function ReturnDatePickerDialog({
             <p className="mt-0.5">{contract.reservationNumber}</p>
           </div>
           <div className="space-y-2">
-            <Label>Expected Return Date *</Label>
+            <Label>Expected Return Date</Label>
             <Input
               type="date"
               value={returnDate}
@@ -1617,10 +1625,24 @@ function ReturnDatePickerDialog({
               min={new Date().toISOString().split('T')[0]}
               className="max-w-sm"
             />
-            <p className="text-xs text-slate-400">After pickup, this contract will appear in check-ins on this date.</p>
+            {dateChanged && (
+              <p className="text-xs text-amber-600 font-medium flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Return date changed — check-in will appear on the new date
+              </p>
+            )}
+            <p className="text-xs text-slate-400">After pickup, this contract will appear in check-ins on the selected date.</p>
           </div>
           <div className="flex gap-3 pt-2">
             <Button variant="outline" onClick={onCancel} className="flex-1">Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={onSkip}
+              disabled={saving}
+              className="flex-1 text-slate-600"
+            >
+              <ArrowRight className="w-4 h-4 mr-2" />Skip
+            </Button>
             <Button
               onClick={onConfirm}
               disabled={!returnDate || saving}
