@@ -1,21 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 
-// GET - List all contracts
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search')?.trim();
+    const date = searchParams.get('date');
+    const type = searchParams.get('type') || 'all';
+
+    // Build where clause
+    const whereConditions: Record<string, any>[] = [];
+
+    // Text search
+    if (search) {
+      whereConditions.push({
+        OR: [
+          { reservationNumber: { contains: search } },
+          { customerName: { contains: search, mode: 'insensitive' as const } },
+          { vehicleModel: { contains: search, mode: 'insensitive' as const } },
+          { vehicleReg: { contains: search, mode: 'insensitive' as const } },
+        ],
+      });
+    }
+
+    // Date filter
+    if (date) {
+      const dateConditions: Record<string, any>[] = [];
+      if (type === 'pickup' || type === 'all') {
+        dateConditions.push({ pickupDate: { startsWith: date } });
+      }
+      if (type === 'return' || type === 'all') {
+        dateConditions.push({ returnDate: { startsWith: date } });
+      }
+      if (dateConditions.length > 0) {
+        whereConditions.push({ OR: dateConditions });
+      }
+    }
+
+    const where = whereConditions.length > 0
+      ? (whereConditions.length === 1 ? whereConditions[0] : { AND: whereConditions })
+      : undefined;
 
     const contracts = await db.contract.findMany({
-      where: search
-        ? {
-            OR: [
-              { reservationNumber: { contains: search } },
-              { customerName: { contains: search, mode: 'insensitive' as const } },
-            ],
-          }
-        : undefined,
+      where,
       include: {
         inspections: {
           include: {
@@ -38,73 +65,27 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Create a single contract manually
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const contract = await db.contract.create({
+
+    const newContract = await db.contract.create({
       data: {
-        reservationNumber: body.reservationNumber || `MANUAL-${Date.now()}`,
-        customerName: body.customerName || 'Unknown',
+        reservationNumber: body.reservationNumber || `MAN-${Date.now()}`,
+        customerName: body.customerName || '',
         customerEmail: body.customerEmail || '',
-        vehicleReg: body.vehicleReg || '',
-        vehicleModel: body.vehicleModel || '',
+        vehicleReg: body.vehicleReg || 'TBD',
+        vehicleModel: body.vehicleModel || 'TBD',
         pickupDate: body.pickupDate ? new Date(body.pickupDate) : new Date(),
         returnDate: body.returnDate ? new Date(body.returnDate) : null,
         status: body.status || 'checkout_pending',
-        locationCode: body.locationCode || 'MLA',
+        locationCode: body.locationCode || null,
       },
     });
-    return NextResponse.json(contract);
+
+    return NextResponse.json(newContract, { status: 201 });
   } catch (error) {
     console.error('Error creating contract:', error);
     return NextResponse.json({ error: 'Failed to create contract' }, { status: 500 });
-  }
-}
-
-// PATCH - Update contract (status, returnDate, etc.)
-export async function PATCH(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { id, status, returnDate, ...rest } = body;
-
-    if (!id) {
-      return NextResponse.json({ error: 'Missing contract id' }, { status: 400 });
-    }
-
-    const data: Record<string, any> = { ...rest, updatedAt: new Date() };
-    if (status) data.status = status;
-    if (returnDate !== undefined) {
-      data.returnDate = returnDate ? new Date(returnDate) : null;
-    }
-
-    const updated = await db.contract.update({
-      where: { id },
-      data,
-    });
-
-    return NextResponse.json(updated);
-  } catch (error) {
-    console.error('Error updating contract:', error);
-    return NextResponse.json({ error: 'Failed to update contract' }, { status: 500 });
-  }
-}
-
-// DELETE - Delete a contract by id
-export async function DELETE(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { id } = body;
-
-    if (!id) {
-      return NextResponse.json({ error: 'Missing contract id' }, { status: 400 });
-    }
-
-    await db.contract.delete({ where: { id } });
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('Error deleting contract:', error);
-    return NextResponse.json({ error: 'Failed to delete contract' }, { status: 500 });
   }
 }
